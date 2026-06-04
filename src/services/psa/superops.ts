@@ -12,7 +12,6 @@ const GET_TICKETS_QUERY = `
       tickets {
         ticketId
         subject
-        description
         status
         priority
         createdTime
@@ -32,6 +31,15 @@ const ADD_NOTE_MUTATION = `
       noteId
       content
       privacyType
+    }
+  }
+`;
+
+// Introspect CreateTicketNoteInput to discover real field names (logged once at startup)
+const INTROSPECT_NOTE_INPUT = `
+  query IntrospectNoteInput {
+    __type(name: "CreateTicketNoteInput") {
+      inputFields { name }
     }
   }
 `;
@@ -64,31 +72,55 @@ export class SuperOpsClient implements PSAClient {
   }
 
   async pollNewTickets(since: number): Promise<SuperOpsTicket[]> {
-    const createdAfter = since > 0
-      ? new Date(since).toISOString()
-      : new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-
+    // Fetch latest 100 tickets without a server-side date filter (ListInfoInput filter
+    // field name is undocumented and causes validation errors). We filter by createdTime
+    // in the caller instead — the dedup ledger ensures we never reprocess a ticket.
     const data = await this.client.request<{
       getTicketList: { tickets: SuperOpsTicket[]; listInfo: { totalCount: number } }
     }>(GET_TICKETS_QUERY, {
       input: {
-        filter: {
-          attribute: 'createdTime',
-          operator: 'after',
-          value: createdAfter,
-        },
         page: 1,
         pageSize: 100,
       },
     });
 
-    return data.getTicketList?.tickets || [];
+    const tickets = data.getTicketList?.tickets || [];
+
+    const OVERLAP_MS = 10 * 60 * 1000;
+    const cutoff = since > 0
+      ? since - OVERLAP_MS
+      : Date.now() - 24 * 60 * 60 * 1000;
+
+    console.log(
+      `[SuperOps] Raw tickets from API: ${tickets.length} | cutoff: ${new Date(cutoff).toISOString()} | since: ${since > 0 ? new Date(since).toISOString() : 'first poll (24h)'}`,
+    );
+    if (tickets.length > 0) {
+      console.log(
+        `[SuperOps] Sample createdTime values: ${tickets.slice(0, 3).map((t) => t.createdTime).join(', ')}`,
+      );
+    }
+
+    return tickets.filter((t) => {
+      const ts = t.createdTime ? new Date(t.createdTime).getTime() : 0;
+      return ts > cutoff;
+    });
+  }
+
+  async logNoteInputFields(): Promise<void> {
+    try {
+      const data = await this.client.request<{ __type: { inputFields: { name: string }[] } }>(INTROSPECT_NOTE_INPUT);
+      const fields = data.__type?.inputFields?.map((f) => f.name) || [];
+      console.log('[SuperOps] CreateTicketNoteInput fields:', fields.join(', '));
+    } catch {
+      // non-critical
+    }
   }
 
   async addTicketNote(ticketId: string, note: string, isPrivate: boolean): Promise<void> {
     await this.client.request(ADD_NOTE_MUTATION, {
       input: {
-        ticketId,
+        // SuperOps uses ticketIdentifier (TicketIdentifierInput) not a flat ticketId field
+        ticketIdentifier: { ticketId },
         content: note,
         privacyType: isPrivate ? 'PRIVATE' : 'PUBLIC',
       },
