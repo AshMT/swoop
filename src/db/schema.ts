@@ -14,6 +14,7 @@ export const tenants = sqliteTable('tenants', {
   slug: text('slug').unique().notNull(),
   superopsSubdomain: text('superops_subdomain').notNull(),
   superopsApiKey: text('superops_api_key').notNull(),
+  superopsRegion: text('superops_region').default('us'),
   aiBaseUrl: text('ai_base_url'),
   aiApiKey: text('ai_api_key'),
   aiModel: text('ai_model'),

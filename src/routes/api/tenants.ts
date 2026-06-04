@@ -6,7 +6,6 @@ import { requireAuth } from '../../middleware/auth';
 import { encrypt, decrypt } from '../../services/crypto';
 import { SuperOpsClient } from '../../services/psa/superops';
 import { z } from 'zod';
-import { v4 as uuidv4 } from 'uuid';
 
 const router = Router();
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || '';
@@ -19,6 +18,7 @@ router.get('/', async (_req, res) => {
     name: tenants.name,
     slug: tenants.slug,
     superopsSubdomain: tenants.superopsSubdomain,
+    superopsRegion: tenants.superopsRegion,
     aiBaseUrl: tenants.aiBaseUrl,
     aiModel: tenants.aiModel,
     lastPolledAt: tenants.lastPolledAt,
@@ -33,6 +33,7 @@ router.get('/:id', async (req, res) => {
     name: tenants.name,
     slug: tenants.slug,
     superopsSubdomain: tenants.superopsSubdomain,
+    superopsRegion: tenants.superopsRegion,
     aiBaseUrl: tenants.aiBaseUrl,
     aiModel: tenants.aiModel,
     lastPolledAt: tenants.lastPolledAt,
@@ -50,6 +51,7 @@ const updateSchema = z.object({
   name: z.string().min(1).optional(),
   superopsSubdomain: z.string().min(1).optional(),
   superopsApiKey: z.string().min(1).optional(),
+  superopsRegion: z.enum(['us', 'eu']).optional(),
   aiBaseUrl: z.string().url().optional().nullable(),
   aiApiKey: z.string().optional().nullable(),
   aiModel: z.string().optional().nullable(),
@@ -86,7 +88,7 @@ router.post('/:id/test-connection', async (req, res) => {
   }
 
   const apiKey = ENCRYPTION_KEY ? decrypt(tenant.superopsApiKey, ENCRYPTION_KEY) : tenant.superopsApiKey;
-  const client = new SuperOpsClient(tenant.superopsSubdomain, apiKey);
+  const client = new SuperOpsClient(tenant.superopsSubdomain, apiKey, tenant.superopsRegion || 'us');
   const result = await client.testConnection();
   res.json(result);
 });

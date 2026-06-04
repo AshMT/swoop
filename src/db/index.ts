@@ -34,6 +34,7 @@ export function initializeDatabase(): void {
       slug TEXT UNIQUE NOT NULL,
       superops_subdomain TEXT NOT NULL,
       superops_api_key TEXT NOT NULL,
+      superops_region TEXT DEFAULT 'us',
       ai_base_url TEXT,
       ai_api_key TEXT,
       ai_model TEXT,
@@ -77,4 +78,13 @@ export function initializeDatabase(): void {
       processed_at INTEGER DEFAULT (unixepoch())
     );
   `);
+
+  // Migrations for existing databases — ALTER TABLE ADD COLUMN fails if column exists,
+  // so we ignore the error and treat it as a no-op.
+  const migrations = [
+    `ALTER TABLE tenants ADD COLUMN superops_region TEXT DEFAULT 'us'`,
+  ];
+  for (const sql of migrations) {
+    try { sqlite.exec(sql); } catch { /* column already exists */ }
+  }
 }

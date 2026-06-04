@@ -56,7 +56,7 @@ async function pollTenant(tenant: Tenant): Promise<void> {
     ? decrypt(tenant.superopsApiKey, ENCRYPTION_KEY)
     : tenant.superopsApiKey;
 
-  const superops = new SuperOpsClient(tenant.superopsSubdomain, apiKey);
+  const superops = new SuperOpsClient(tenant.superopsSubdomain, apiKey, tenant.superopsRegion || 'us');
 
   let tickets: SuperOpsTicket[];
   try {

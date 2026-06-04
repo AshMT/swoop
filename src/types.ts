@@ -11,6 +11,7 @@ export interface Tenant {
   slug: string;
   superopsSubdomain: string;
   superopsApiKey: string; // encrypted at rest
+  superopsRegion: string | null;
   aiBaseUrl: string | null;
   aiApiKey: string | null; // encrypted at rest
   aiModel: string | null;
