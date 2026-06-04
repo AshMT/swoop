@@ -4,11 +4,13 @@ on:
   push:
     branches:
       - main
+      - claude/swoop-phase-1-build-PRp7n
     tags:
       - 'v*'
   pull_request:
     branches:
       - main
+  workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
@@ -52,7 +54,7 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
             type=sha,prefix=sha-,format=short
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/claude/swoop-phase-1-build-PRp7n' }}
 
       - name: Build and push
         uses: docker/build-push-action@v5
