@@ -87,8 +87,8 @@ router.post('/:id/test-connection', async (req, res) => {
 
   const apiKey = ENCRYPTION_KEY ? decrypt(tenant.superopsApiKey, ENCRYPTION_KEY) : tenant.superopsApiKey;
   const client = new SuperOpsClient(tenant.superopsSubdomain, apiKey);
-  const ok = await client.testConnection();
-  res.json({ ok });
+  const result = await client.testConnection();
+  res.json(result);
 });
 
 export default router;

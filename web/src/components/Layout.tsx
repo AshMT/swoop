@@ -41,6 +41,16 @@ export default function Layout() {
           >
             <span>Clients</span>
           </NavLink>
+          <NavLink
+            to="/settings"
+            className={({ isActive }) =>
+              `flex items-center gap-2.5 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                isActive ? 'bg-swoop-600 text-white' : 'text-gray-300 hover:bg-gray-800 hover:text-white'
+              }`
+            }
+          >
+            <span>Settings</span>
+          </NavLink>
         </nav>
 
         <div className="px-3 py-4 border-t border-gray-700">
