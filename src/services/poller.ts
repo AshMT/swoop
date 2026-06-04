@@ -11,6 +11,7 @@ const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || '';
 const POLL_INTERVAL_MS = 60_000;
 
 let pollerTimer: ReturnType<typeof setInterval> | null = null;
+let pollerRunning = false;
 
 export function startPoller(): void {
   if (pollerTimer) return;
@@ -42,22 +43,33 @@ function extractRequesterEmail(requester: SuperOpsTicket['requester']): string {
 }
 
 async function runAllTenants(): Promise<void> {
-  let allTenants: Tenant[];
-  try {
-    allTenants = await db.select().from(tenants);
-  } catch (err) {
-    console.error('[Poller] Failed to load tenants:', err);
+  if (pollerRunning) {
+    console.log('[Poller] Previous cycle still running — skipping this tick');
     return;
   }
+  pollerRunning = true;
+  try {
+    let allTenants: Tenant[];
+    try {
+      allTenants = await db.select().from(tenants);
+    } catch (err) {
+      console.error('[Poller] Failed to load tenants:', err);
+      return;
+    }
 
-  for (const tenant of allTenants) {
-    await pollTenant(tenant).catch((err) => {
-      console.error(`[Poller] Tenant "${tenant.name}" poll failed:`, err);
-    });
+    for (const tenant of allTenants) {
+      await pollTenant(tenant).catch((err) => {
+        console.error(`[Poller] Tenant "${tenant.name}" poll failed:`, err);
+      });
+    }
+  } finally {
+    pollerRunning = false;
   }
 }
 
 async function pollTenant(tenant: Tenant): Promise<void> {
+  const pollStartedAt = Date.now(); // capture before any async work
+
   const enabledClients = await db
     .select()
     .from(clients)
@@ -70,6 +82,9 @@ async function pollTenant(tenant: Tenant): Promise<void> {
     : tenant.superopsApiKey;
 
   const superops = new SuperOpsClient(tenant.superopsSubdomain, apiKey, tenant.superopsRegion || 'us');
+
+  // Log CreateTicketNoteInput fields once so we can verify the mutation field names
+  if (!tenant.lastPolledAt) void superops.logNoteInputFields();
 
   let tickets: SuperOpsTicket[];
   try {
@@ -85,9 +100,10 @@ async function pollTenant(tenant: Tenant): Promise<void> {
     await processTicket(ticket, tenant, enabledClients, superops);
   }
 
+  // Use poll start time so tickets created DURING a slow AI call are still in the next window
   await db
     .update(tenants)
-    .set({ lastPolledAt: Date.now() })
+    .set({ lastPolledAt: pollStartedAt })
     .where(eq(tenants.id, tenant.id));
 }
 
@@ -117,6 +133,9 @@ async function processTicket(
 
   if (!matchedClient) return;
 
+  // Claim the ticket immediately so concurrent/overlapping poll cycles can't pick it up
+  await markProcessed(ticketId, tenant.id);
+
   const requesterEmail = extractRequesterEmail(ticket.requester);
   console.log(`[Poller] Processing ticket ${ticketId}: "${ticket.subject}"`);
 
@@ -127,7 +146,7 @@ async function processTicket(
     const result = await classifyTicket(
       {
         subject: ticket.subject,
-        description: ticket.description || '',
+        description: '',
         requesterEmail,
       },
       {
@@ -140,8 +159,7 @@ async function processTicket(
     rawAiResponse = result.rawResponse;
   } catch (err) {
     console.error(`[Poller] AI classification failed for ticket ${ticketId}:`, err);
-    await markProcessed(ticketId, tenant.id);
-    return;
+    return; // already marked processed above
   }
 
   const noteText = formatProposalNote(classification, tenant.name);
@@ -157,7 +175,7 @@ async function processTicket(
     clientId: matchedClient.id,
     ticketId,
     ticketSubject: ticket.subject,
-    ticketBody: ticket.description || null,
+    ticketBody: null,
     requesterEmail: requesterEmail || null,
     classification: classification.classification,
     confidence: classification.confidence,
@@ -169,8 +187,6 @@ async function processTicket(
     rawAiResponse,
     status: 'pending',
   });
-
-  await markProcessed(ticketId, tenant.id);
 
   console.log(
     `[Poller] Ticket ${ticketId} → ${classification.classification} (confidence: ${classification.confidence.toFixed(2)})`,

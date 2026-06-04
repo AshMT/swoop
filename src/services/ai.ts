@@ -34,8 +34,15 @@ interface OpenAIResponse {
   }>;
 }
 
+function normaliseBaseUrl(url: string): string {
+  // Strip trailing slash and ensure /v1 is present so callers can always append /chat/completions
+  const stripped = url.replace(/\/+$/, '');
+  return stripped.endsWith('/v1') ? stripped : `${stripped}/v1`;
+}
+
 function getAiConfig(tenant: Tenant): { baseUrl: string; apiKey: string; model: string } {
-  const baseUrl = tenant.aiBaseUrl || process.env.AI_BASE_URL || 'http://localhost:11434/v1';
+  const raw = tenant.aiBaseUrl || process.env.AI_BASE_URL || 'http://localhost:11434/v1';
+  const baseUrl = normaliseBaseUrl(raw);
   const rawKey = tenant.aiApiKey
     ? (ENCRYPTION_KEY ? decrypt(tenant.aiApiKey, ENCRYPTION_KEY) : tenant.aiApiKey)
     : (process.env.AI_API_KEY || 'ollama');
@@ -66,6 +73,7 @@ export async function classifyTicket(
   try {
     const response = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
+      signal: AbortSignal.timeout(300_000), // 5 min — large local models can be slow
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`,
@@ -118,7 +126,7 @@ export async function testAiConnection(
   model: string,
 ): Promise<boolean> {
   try {
-    const response = await fetch(`${baseUrl}/chat/completions`, {
+    const response = await fetch(`${normaliseBaseUrl(baseUrl)}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

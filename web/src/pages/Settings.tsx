@@ -213,10 +213,10 @@ export default function Settings() {
               type="url"
               value={aiBaseUrl}
               onChange={(e) => { setAiBaseUrl(e.target.value); setAiTest(null); }}
-              placeholder="http://localhost:11434/v1"
+              placeholder="http://192.168.1.x:11434"
               className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-swoop-500"
             />
-            <p className="text-xs text-gray-400 mt-1">OpenAI-compatible endpoint — works with Ollama, LM Studio, Groq, OpenAI</p>
+            <p className="text-xs text-gray-400 mt-1">Ollama: <code>http://192.168.1.x:11434</code> — <code>/v1</code> is added automatically</p>
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">API Key <span className="text-gray-400 font-normal">(leave blank to keep existing or if not required)</span></label>
