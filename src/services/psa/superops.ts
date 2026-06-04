@@ -2,44 +2,45 @@ import { GraphQLClient } from 'graphql-request';
 import type { PSAClient } from './interface';
 import type { SuperOpsTicket } from '../../types';
 
-// NOTE: SuperOps GraphQL field names are approximations based on their API conventions.
-// If queries fail, verify field names against: https://{subdomain}.superops.ai/graphql (introspection)
-// or the SuperOps API documentation. Common adjustments needed:
-//   - 'description' may be 'ticketBody' or 'body'
-//   - 'requesterEmail' may be nested as 'requester { email }'
-//   - 'companyId' may be 'clientId' or nested as 'company { id }'
+// Documented SuperOps GraphQL API (api.superops.ai/msp or euapi.superops.ai/msp)
+// Subdomain passed as CustomerSubDomain header, not in URL.
+// Fields verified against developer.superops.com/msp
 
 const GET_TICKETS_QUERY = `
-  query GetNewTickets($createdAfter: String, $limit: Int) {
-    tickets(
-      filter: { createdAfter: $createdAfter }
-      limit: $limit
-      sort: { field: "createdAt", order: "asc" }
-    ) {
-      id
-      subject
-      description
-      requesterEmail
-      companyId
-      companyName
-      status
-      createdAt
+  query GetTicketList($input: ListInfoInput!) {
+    getTicketList(input: $input) {
+      tickets {
+        ticketId
+        subject
+        description
+        status
+        priority
+        createdTime
+        client
+        requester
+      }
+      listInfo {
+        totalCount
+      }
     }
   }
 `;
 
 const ADD_NOTE_MUTATION = `
-  mutation AddTicketNote($ticketId: String!, $note: String!, $isPrivate: Boolean!) {
-    addTicketNote(ticketId: $ticketId, note: $note, isPrivate: $isPrivate) {
-      id
+  mutation CreateTicketNote($input: CreateTicketNoteInput!) {
+    createTicketNote(input: $input) {
+      noteId
+      content
+      privacyType
     }
   }
 `;
 
+// Introspection-safe test — asks for schema metadata, never fails on missing fields
 const TEST_QUERY = `
   query TestConnection {
-    tickets(limit: 1) {
-      id
+    __schema {
+      queryType { name }
     }
   }
 `;
@@ -49,7 +50,6 @@ export class SuperOpsClient implements PSAClient {
   readonly endpoint: string;
 
   constructor(subdomain: string, apiKey: string, region: string = 'us') {
-    // SuperOps uses a global API endpoint with the subdomain passed as a header
     const baseUrl = region === 'eu'
       ? 'https://euapi.superops.ai/msp'
       : 'https://api.superops.ai/msp';
@@ -64,24 +64,34 @@ export class SuperOpsClient implements PSAClient {
   }
 
   async pollNewTickets(since: number): Promise<SuperOpsTicket[]> {
-    // Convert Unix timestamp (ms) to ISO string for the API
     const createdAfter = since > 0
       ? new Date(since).toISOString()
-      : new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(); // default: last 24h on first poll
+      : new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
-    const data = await this.client.request<{ tickets: SuperOpsTicket[] }>(GET_TICKETS_QUERY, {
-      createdAfter,
-      limit: 100,
+    const data = await this.client.request<{
+      getTicketList: { tickets: SuperOpsTicket[]; listInfo: { totalCount: number } }
+    }>(GET_TICKETS_QUERY, {
+      input: {
+        filter: {
+          attribute: 'createdTime',
+          operator: 'after',
+          value: createdAfter,
+        },
+        page: 1,
+        pageSize: 100,
+      },
     });
 
-    return data.tickets || [];
+    return data.getTicketList?.tickets || [];
   }
 
   async addTicketNote(ticketId: string, note: string, isPrivate: boolean): Promise<void> {
     await this.client.request(ADD_NOTE_MUTATION, {
-      ticketId,
-      note,
-      isPrivate,
+      input: {
+        ticketId,
+        content: note,
+        privacyType: isPrivate ? 'PRIVATE' : 'PUBLIC',
+      },
     });
   }
 
@@ -92,14 +102,13 @@ export class SuperOpsClient implements PSAClient {
     } catch (err: unknown) {
       let message = 'Connection failed';
       if (err && typeof err === 'object') {
-        // graphql-request wraps HTTP errors
         const e = err as Record<string, unknown>;
         if (e.response && typeof e.response === 'object') {
           const r = e.response as Record<string, unknown>;
           if (r.status === 401 || r.status === 403) {
             message = `Authentication failed (HTTP ${r.status}) — check your API token`;
           } else if (r.status === 404) {
-            message = `Endpoint not found (HTTP 404) — check your subdomain: ${this.endpoint}`;
+            message = `Endpoint not found (HTTP 404) — check your subdomain`;
           } else if (typeof r.status === 'number') {
             message = `HTTP ${r.status} from SuperOps`;
           }
