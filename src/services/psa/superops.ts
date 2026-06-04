@@ -89,11 +89,11 @@ export class SuperOpsClient implements PSAClient {
     let data: ListResult;
     try {
       data = await this.client.request<ListResult>(GET_TICKETS_QUERY, {
-        input: { page: 1, pageSize: 100, sortBy: 'createdTime', sortOrder: 'DESC' },
+        input: { page: 1, pageSize: 100, sortColumn: 'createdTime', sortOrder: 'DESC' },
       });
-      console.log('[SuperOps] Sort DESC applied (sortBy/sortOrder)');
+      console.log('[SuperOps] Sort DESC applied (sortColumn/sortOrder)');
     } catch (sortErr) {
-      console.warn('[SuperOps] sortBy/sortOrder rejected, falling back to default sort:', (sortErr as Error).message?.slice(0, 120));
+      console.warn('[SuperOps] sortColumn/sortOrder rejected, falling back to default sort:', (sortErr as Error).message?.slice(0, 120));
       data = await this.client.request<ListResult>(GET_TICKETS_QUERY, {
         input: { page: 1, pageSize: 100 },
       });

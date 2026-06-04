@@ -12,6 +12,7 @@ const POLL_INTERVAL_MS = 60_000;
 
 let pollerTimer: ReturnType<typeof setInterval> | null = null;
 let pollerRunning = false;
+let introspectionLogged = false; // run once per process, not gated on lastPolledAt
 
 export function startPoller(): void {
   if (pollerTimer) return;
@@ -83,8 +84,9 @@ async function pollTenant(tenant: Tenant): Promise<void> {
 
   const superops = new SuperOpsClient(tenant.superopsSubdomain, apiKey, tenant.superopsRegion || 'us');
 
-  // Log input type fields once so we can verify field names against the live schema
-  if (!tenant.lastPolledAt) {
+  // Log input type fields once per startup to verify field names against the live schema
+  if (!introspectionLogged) {
+    introspectionLogged = true;
     void superops.logNoteInputFields();
     void superops.logListInputFields();
   }
