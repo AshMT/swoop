@@ -63,25 +63,29 @@ export class SuperOpsClient implements PSAClient {
   }
 
   async pollNewTickets(since: number): Promise<SuperOpsTicket[]> {
-    const createdAfter = since > 0
-      ? new Date(since).toISOString()
-      : new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-
+    // Fetch latest 100 tickets without a server-side date filter (ListInfoInput filter
+    // field name is undocumented and causes validation errors). We filter by createdTime
+    // in the caller instead — the dedup ledger ensures we never reprocess a ticket.
     const data = await this.client.request<{
       getTicketList: { tickets: SuperOpsTicket[]; listInfo: { totalCount: number } }
     }>(GET_TICKETS_QUERY, {
       input: {
-        filter: {
-          attribute: 'createdTime',
-          operator: 'after',
-          value: createdAfter,
-        },
         page: 1,
         pageSize: 100,
       },
     });
 
-    return data.getTicketList?.tickets || [];
+    const tickets = data.getTicketList?.tickets || [];
+
+    // Filter client-side: only tickets newer than `since` (or last 24h on first poll)
+    const cutoff = since > 0
+      ? since
+      : Date.now() - 24 * 60 * 60 * 1000;
+
+    return tickets.filter((t) => {
+      const ts = t.createdTime ? new Date(t.createdTime).getTime() : 0;
+      return ts > cutoff;
+    });
   }
 
   async addTicketNote(ticketId: string, note: string, isPrivate: boolean): Promise<void> {
