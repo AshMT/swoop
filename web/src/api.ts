@@ -1,0 +1,124 @@
+import axios from 'axios';
+
+const api = axios.create({
+  baseURL: '/api',
+});
+
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem('swoop_token');
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+api.interceptors.response.use(
+  (res) => res,
+  (err) => {
+    if (err.response?.status === 401) {
+      localStorage.removeItem('swoop_token');
+      window.location.href = '/login';
+    }
+    return Promise.reject(err);
+  },
+);
+
+export default api;
+
+// ─── Auth ──────────────────────────────────────────────────────────────────────
+export const login = (email: string, password: string) =>
+  api.post<{ token: string; email: string }>('/auth/login', { email, password });
+
+// ─── Setup ────────────────────────────────────────────────────────────────────
+export const getSetupStatus = () =>
+  api.get<{ setupComplete: boolean; hasAdmin: boolean; hasTenant: boolean }>('/setup/status');
+
+export const setupAdmin = (email: string, password: string) =>
+  api.post<{ token: string; email: string }>('/setup/admin', { email, password });
+
+export const testSuperOps = (subdomain: string, apiKey: string) =>
+  api.post<{ ok: boolean }>('/setup/test-superops', { subdomain, apiKey });
+
+export const setupTenant = (name: string, subdomain: string, apiKey: string) =>
+  api.post<{ id: string; name: string; slug: string }>('/setup/tenant', { name, subdomain, apiKey });
+
+export const testAi = (baseUrl: string, apiKey: string, model: string) =>
+  api.post<{ ok: boolean }>('/setup/test-ai', { baseUrl, apiKey, model });
+
+export const setupAiConfig = (tenantId: string, baseUrl: string, apiKey: string, model: string) =>
+  api.post('/setup/ai-config', { tenantId, baseUrl, apiKey, model });
+
+export const setupClient = (tenantId: string, name: string, superopsCompanyId?: string, automationEnabled?: boolean) =>
+  api.post<{ id: string; name: string }>('/setup/client', { tenantId, name, superopsCompanyId, automationEnabled });
+
+// ─── Tenants ──────────────────────────────────────────────────────────────────
+export const getTenants = () => api.get<Tenant[]>('/tenants');
+
+// ─── Clients ──────────────────────────────────────────────────────────────────
+export const getClients = (tenantId?: string) =>
+  api.get<Client[]>('/clients', { params: tenantId ? { tenantId } : undefined });
+
+export const createClient = (data: {
+  tenantId: string;
+  name: string;
+  superopsCompanyId?: string;
+  automationEnabled?: boolean;
+}) => api.post<Client>('/clients', data);
+
+export const updateClient = (id: string, data: Partial<Client>) =>
+  api.patch<Client>(`/clients/${id}`, data);
+
+export const deleteClient = (id: string) => api.delete(`/clients/${id}`);
+
+// ─── Actions ──────────────────────────────────────────────────────────────────
+export const getActions = (params?: { clientId?: string; tenantId?: string; classification?: string; limit?: number }) =>
+  api.get<ActionLog[]>('/actions', { params });
+
+export const getActionStats = (tenantId?: string) =>
+  api.get<ActionStats>('/actions/stats', { params: tenantId ? { tenantId } : undefined });
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+export interface Tenant {
+  id: string;
+  name: string;
+  slug: string;
+  superopsSubdomain: string;
+  aiBaseUrl: string | null;
+  aiModel: string | null;
+  lastPolledAt: number | null;
+  createdAt: number | null;
+}
+
+export interface Client {
+  id: string;
+  tenantId: string;
+  name: string;
+  superopsCompanyId: string | null;
+  automationEnabled: boolean;
+  createdAt: number | null;
+}
+
+export interface ActionLog {
+  id: string;
+  tenantId: string;
+  clientId: string;
+  ticketId: string;
+  ticketSubject: string | null;
+  ticketBody: string | null;
+  requesterEmail: string | null;
+  classification: string | null;
+  confidence: number | null;
+  sensitivity: string | null;
+  entities: string | null;
+  reasoning: string | null;
+  followUpQuestion: string | null;
+  proposedPsaNote: string | null;
+  status: string | null;
+  createdAt: number | null;
+}
+
+export interface ActionStats {
+  total: number;
+  byClassification: Record<string, number>;
+  highSensitivity: number;
+}
