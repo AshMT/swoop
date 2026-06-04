@@ -37,7 +37,7 @@ export const setupAdmin = (email: string, password: string) =>
   api.post<{ token: string; email: string }>('/setup/admin', { email, password });
 
 export const testSuperOps = (subdomain: string, apiKey: string) =>
-  api.post<{ ok: boolean }>('/setup/test-superops', { subdomain, apiKey });
+  api.post<{ ok: boolean; error?: string; endpoint?: string }>('/setup/test-superops', { subdomain, apiKey });
 
 export const setupTenant = (name: string, subdomain: string, apiKey: string) =>
   api.post<{ id: string; name: string; slug: string }>('/setup/tenant', { name, subdomain, apiKey });

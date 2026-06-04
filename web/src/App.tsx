@@ -4,6 +4,7 @@ import Login from './pages/Login';
 import Setup from './pages/Setup';
 import Dashboard from './pages/Dashboard';
 import Clients from './pages/Clients';
+import Settings from './pages/Settings';
 import Layout from './components/Layout';
 import { getSetupStatus } from './api';
 
@@ -55,6 +56,7 @@ function App() {
         >
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/clients" element={<Clients />} />
+          <Route path="/settings" element={<Settings />} />
         </Route>
       </Routes>
     </BrowserRouter>

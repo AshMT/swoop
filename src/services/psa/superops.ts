@@ -46,10 +46,16 @@ const TEST_QUERY = `
 
 export class SuperOpsClient implements PSAClient {
   private client: GraphQLClient;
+  readonly endpoint: string;
 
   constructor(subdomain: string, apiKey: string) {
-    const endpoint = `https://${subdomain}.superops.ai/graphql`;
-    this.client = new GraphQLClient(endpoint, {
+    // Strip accidental full URL if user pastes it
+    const clean = subdomain
+      .replace(/^https?:\/\//, '')
+      .replace(/\.superops\.ai.*$/, '')
+      .trim();
+    this.endpoint = `https://${clean}.superops.ai/graphql`;
+    this.client = new GraphQLClient(this.endpoint, {
       headers: {
         Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
@@ -79,12 +85,35 @@ export class SuperOpsClient implements PSAClient {
     });
   }
 
-  async testConnection(): Promise<boolean> {
+  async testConnection(): Promise<{ ok: boolean; error?: string; endpoint?: string }> {
     try {
       await this.client.request(TEST_QUERY);
-      return true;
-    } catch {
-      return false;
+      return { ok: true, endpoint: this.endpoint };
+    } catch (err: unknown) {
+      let message = 'Connection failed';
+      if (err && typeof err === 'object') {
+        // graphql-request wraps HTTP errors
+        const e = err as Record<string, unknown>;
+        if (e.response && typeof e.response === 'object') {
+          const r = e.response as Record<string, unknown>;
+          if (r.status === 401 || r.status === 403) {
+            message = `Authentication failed (HTTP ${r.status}) — check your API token`;
+          } else if (r.status === 404) {
+            message = `Endpoint not found (HTTP 404) — check your subdomain: ${this.endpoint}`;
+          } else if (typeof r.status === 'number') {
+            message = `HTTP ${r.status} from SuperOps`;
+          }
+          if (r.errors && Array.isArray(r.errors) && r.errors.length > 0) {
+            const gqlErr = r.errors[0] as Record<string, unknown>;
+            message += ` — ${gqlErr.message || JSON.stringify(gqlErr)}`;
+          }
+        } else if (e.code === 'ENOTFOUND' || e.code === 'ECONNREFUSED') {
+          message = `Cannot reach ${this.endpoint} — check your subdomain`;
+        } else if (typeof e.message === 'string') {
+          message = e.message;
+        }
+      }
+      return { ok: false, error: message, endpoint: this.endpoint };
     }
   }
 }

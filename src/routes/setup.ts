@@ -62,8 +62,8 @@ router.post('/test-superops', async (req, res) => {
   }
 
   const client = new SuperOpsClient(subdomain.trim(), apiKey.trim());
-  const ok = await client.testConnection();
-  res.json({ ok });
+  const result = await client.testConnection();
+  res.json(result);
 });
 
 // Step 2: Save tenant (SuperOps connection)
