@@ -1,11 +1,9 @@
-import { Outlet, NavLink, useNavigate } from 'react-router-dom';
+import { Outlet, NavLink } from 'react-router-dom';
 
 export default function Layout() {
-  const navigate = useNavigate();
-
   const handleLogout = () => {
     localStorage.removeItem('swoop_token');
-    navigate('/login');
+    window.location.assign('/login');
   };
 
   return (

@@ -11,7 +11,7 @@ import { getSetupStatus } from './api';
 function App() {
   const [loading, setLoading] = useState(true);
   const [setupComplete, setSetupComplete] = useState(false);
-  const token = localStorage.getItem('swoop_token');
+  const [token, setToken] = useState(() => localStorage.getItem('swoop_token'));
 
   useEffect(() => {
     getSetupStatus()
