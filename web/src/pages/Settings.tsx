@@ -12,6 +12,7 @@ export default function Settings() {
   // SuperOps fields
   const [subdomain, setSubdomain] = useState('');
   const [superopsKey, setSuperopsKey] = useState('');
+  const [superopsRegion, setSuperopsRegion] = useState<'us' | 'eu'>('us');
   const [superopsTest, setSuperopsTest] = useState<TestResult>(null);
   const [superopsTesting, setSuperopsTesting] = useState(false);
   const [superopsSave, setSuperopsSave] = useState<SaveStatus>('idle');
@@ -31,6 +32,7 @@ export default function Settings() {
         if (t) {
           setTenant(t);
           setSubdomain(t.superopsSubdomain || '');
+          setSuperopsRegion((t.superopsRegion as 'us' | 'eu') || 'us');
           setAiBaseUrl(t.aiBaseUrl || '');
           setAiModel(t.aiModel || '');
         }
@@ -41,7 +43,8 @@ export default function Settings() {
   const handleSubdomainChange = (val: string) => {
     const clean = val
       .replace(/^https?:\/\//, '')
-      .replace(/\.superops\.ai.*$/, '');
+      .replace(/\/.*$/, '')
+      .trim();
     setSubdomain(clean);
     setSuperopsTest(null);
   };
@@ -51,7 +54,7 @@ export default function Settings() {
     setSuperopsTesting(true);
     setSuperopsTest(null);
     try {
-      const res = await testSuperOps(subdomain.trim(), superopsKey.trim());
+      const res = await testSuperOps(subdomain.trim(), superopsKey.trim(), superopsRegion);
       setSuperopsTest(res.data as TestResult);
     } catch {
       setSuperopsTest({ ok: false, error: 'Request failed' });
@@ -64,11 +67,11 @@ export default function Settings() {
     if (!tenant) return;
     setSuperopsSave('saving');
     try {
-      const body: Record<string, string> = { superopsSubdomain: subdomain.trim() };
+      const body: Record<string, string> = { superopsSubdomain: subdomain.trim(), superopsRegion };
       if (superopsKey.trim()) body.superopsApiKey = superopsKey.trim();
       await api.patch(`/tenants/${tenant.id}`, body);
       setSuperopsSave('saved');
-      setTenant({ ...tenant, superopsSubdomain: subdomain.trim() });
+      setTenant({ ...tenant, superopsSubdomain: subdomain.trim(), superopsRegion });
       setSuperopsKey('');
       setTimeout(() => setSuperopsSave('idle'), 2500);
     } catch {
@@ -141,7 +144,18 @@ export default function Settings() {
               placeholder="yourcompany"
               className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-swoop-500"
             />
-            <p className="text-xs text-gray-400 mt-1">Just the subdomain — e.g. <code>mightyit</code> not <code>mightyit.superops.ai</code></p>
+            <p className="text-xs text-gray-400 mt-1">Just your subdomain — e.g. <code>mightyit</code> (not the full URL)</p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Data centre</label>
+            <div className="flex gap-4">
+              {(['us', 'eu'] as const).map((r) => (
+                <label key={r} className="flex items-center gap-2 cursor-pointer">
+                  <input type="radio" name="region" value={r} checked={superopsRegion === r} onChange={() => { setSuperopsRegion(r); setSuperopsTest(null); }} className="accent-swoop-600" />
+                  <span className="text-sm text-gray-700">{r === 'us' ? 'US / Global' : 'EU'}</span>
+                </label>
+              ))}
+            </div>
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">API Key <span className="text-gray-400 font-normal">(leave blank to keep existing)</span></label>

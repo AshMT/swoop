@@ -33,6 +33,7 @@ export default function Setup({ onComplete }: Props) {
   const [mspName, setMspName] = useState('');
   const [subdomain, setSubdomain] = useState('');
   const [superopsKey, setSuperopsKey] = useState('');
+  const [superopsRegion, setSuperopsRegion] = useState<'us' | 'eu'>('us');
   const [aiBaseUrl, setAiBaseUrl] = useState('http://localhost:11434/v1');
   const [aiKey, setAiKey] = useState('ollama');
   const [aiModel, setAiModel] = useState('qwen3:8b');
@@ -55,11 +56,11 @@ export default function Setup({ onComplete }: Props) {
     }
   };
 
-  // Clean subdomain as user types (strip URL if pasted)
+  // Strip protocol/path if user pastes a full URL; keep the hostname as-is
   const handleSubdomainChange = (val: string) => {
     const clean = val
       .replace(/^https?:\/\//, '')
-      .replace(/\.superops\.ai.*$/, '')
+      .replace(/\/.*$/, '')
       .trim();
     setSubdomain(clean);
   };
@@ -89,7 +90,7 @@ export default function Setup({ onComplete }: Props) {
     setTesting(true);
     setTestResult(null);
     try {
-      const res = await testSuperOps(subdomain, superopsKey);
+      const res = await testSuperOps(subdomain, superopsKey, superopsRegion);
       setTestResult(res.data);
     } catch {
       setTestResult({ ok: false, error: 'Request failed — check network' });
@@ -103,7 +104,7 @@ export default function Setup({ onComplete }: Props) {
     setError('');
     setLoading(true);
     try {
-      const res = await setupTenant(mspName, subdomain, superopsKey);
+      const res = await setupTenant(mspName, subdomain, superopsKey, superopsRegion);
       setTenantId(res.data.id);
       setTestResult(null);
       setStep('ai');
@@ -242,15 +243,22 @@ export default function Setup({ onComplete }: Props) {
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">SuperOps subdomain</label>
-                <div className="flex rounded-lg border border-gray-300 overflow-hidden focus-within:ring-2 focus-within:ring-swoop-500">
-                  <span className="bg-gray-50 px-3 py-2 text-sm text-gray-500 border-r border-gray-300 whitespace-nowrap">https://</span>
-                  <input type="text" value={subdomain} onChange={(e) => handleSubdomainChange(e.target.value)}
-                    required
-                    className="flex-1 px-3 py-2 text-sm focus:outline-none min-w-0"
-                    placeholder="yourcompany" />
-                  <span className="bg-gray-50 px-3 py-2 text-sm text-gray-500 border-l border-gray-300 whitespace-nowrap">.superops.ai</span>
+                <input type="text" value={subdomain} onChange={(e) => handleSubdomainChange(e.target.value)}
+                  required
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-swoop-500"
+                  placeholder="mightyit" />
+                <p className="text-xs text-gray-400 mt-1">Just your subdomain — e.g. <code>mightyit</code> (not the full URL)</p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Data centre</label>
+                <div className="flex gap-3">
+                  {(['us', 'eu'] as const).map((r) => (
+                    <label key={r} className="flex items-center gap-2 cursor-pointer">
+                      <input type="radio" name="region" value={r} checked={superopsRegion === r} onChange={() => setSuperopsRegion(r)} className="accent-swoop-600" />
+                      <span className="text-sm text-gray-700">{r === 'us' ? 'US / Global' : 'EU'}</span>
+                    </label>
+                  ))}
                 </div>
-                <p className="text-xs text-gray-400 mt-1">Just the subdomain — e.g. <code>mightyit</code> not <code>mightyit.superops.ai</code></p>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">API token</label>

@@ -11,6 +11,7 @@ export interface Tenant {
   slug: string;
   superopsSubdomain: string;
   superopsApiKey: string; // encrypted at rest
+  superopsRegion: string | null;
   aiBaseUrl: string | null;
   aiApiKey: string | null; // encrypted at rest
   aiModel: string | null;
@@ -55,14 +56,15 @@ export interface ProcessedTicket {
 }
 
 export interface SuperOpsTicket {
-  id: string;
+  ticketId: string;
   subject: string;
-  description: string;
-  requesterEmail: string;
-  companyId: string;
-  companyName: string;
+  description?: string;
   status: string;
-  createdAt: string;
+  priority?: string;
+  createdTime: string; // ISO datetime string from SuperOps
+  // client and requester may be plain strings or objects depending on query depth
+  client?: string | { id?: string; name?: string; clientId?: string; clientName?: string };
+  requester?: string | { email?: string; name?: string; emailId?: string };
 }
 
 export interface AiClassification {

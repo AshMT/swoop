@@ -36,11 +36,11 @@ export const getSetupStatus = () =>
 export const setupAdmin = (email: string, password: string) =>
   api.post<{ token: string; email: string }>('/setup/admin', { email, password });
 
-export const testSuperOps = (subdomain: string, apiKey: string) =>
-  api.post<{ ok: boolean; error?: string; endpoint?: string }>('/setup/test-superops', { subdomain, apiKey });
+export const testSuperOps = (subdomain: string, apiKey: string, region: string = 'us') =>
+  api.post<{ ok: boolean; error?: string; endpoint?: string }>('/setup/test-superops', { subdomain, apiKey, region });
 
-export const setupTenant = (name: string, subdomain: string, apiKey: string) =>
-  api.post<{ id: string; name: string; slug: string }>('/setup/tenant', { name, subdomain, apiKey });
+export const setupTenant = (name: string, subdomain: string, apiKey: string, region: string = 'us') =>
+  api.post<{ id: string; name: string; slug: string }>('/setup/tenant', { name, subdomain, apiKey, region });
 
 export const testAi = (baseUrl: string, apiKey: string, model: string) =>
   api.post<{ ok: boolean }>('/setup/test-ai', { baseUrl, apiKey, model });
@@ -83,6 +83,7 @@ export interface Tenant {
   name: string;
   slug: string;
   superopsSubdomain: string;
+  superopsRegion: string | null;
   aiBaseUrl: string | null;
   aiModel: string | null;
   lastPolledAt: number | null;

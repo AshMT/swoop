@@ -55,13 +55,13 @@ router.post('/admin', async (req, res) => {
 
 // Step 2: Test SuperOps connection
 router.post('/test-superops', async (req, res) => {
-  const { subdomain, apiKey } = req.body as { subdomain: string; apiKey: string };
+  const { subdomain, apiKey, region } = req.body as { subdomain: string; apiKey: string; region?: string };
   if (!subdomain || !apiKey) {
     res.status(400).json({ error: 'subdomain and apiKey required' });
     return;
   }
 
-  const client = new SuperOpsClient(subdomain.trim(), apiKey.trim());
+  const client = new SuperOpsClient(subdomain.trim(), apiKey.trim(), region || 'us');
   const result = await client.testConnection();
   res.json(result);
 });
@@ -71,6 +71,7 @@ const tenantSchema = z.object({
   name: z.string().min(1),
   subdomain: z.string().min(1),
   apiKey: z.string().min(1),
+  region: z.enum(['us', 'eu']).default('us'),
 });
 
 router.post('/tenant', async (req, res) => {
@@ -80,7 +81,7 @@ router.post('/tenant', async (req, res) => {
     return;
   }
 
-  const { name, subdomain, apiKey } = parsed.data;
+  const { name, subdomain, apiKey, region } = parsed.data;
 
   const encryptedKey = ENCRYPTION_KEY ? encrypt(apiKey, ENCRYPTION_KEY) : apiKey;
   const slug = name.toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-');
@@ -92,6 +93,7 @@ router.post('/tenant', async (req, res) => {
     slug,
     superopsSubdomain: subdomain.trim(),
     superopsApiKey: encryptedKey,
+    superopsRegion: region,
   });
 
   res.json({ id, name, slug });
