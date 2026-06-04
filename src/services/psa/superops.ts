@@ -86,13 +86,19 @@ export class SuperOpsClient implements PSAClient {
 
     const tickets = data.getTicketList?.tickets || [];
 
-    // Filter client-side: only tickets newer than `since` minus a 10-minute overlap buffer.
-    // The buffer covers the gap where lastPolledAt was saved at end-of-poll (after a slow
-    // AI call) rather than at poll start. Dedup ledger prevents reprocessing anything twice.
     const OVERLAP_MS = 10 * 60 * 1000;
     const cutoff = since > 0
       ? since - OVERLAP_MS
       : Date.now() - 24 * 60 * 60 * 1000;
+
+    console.log(
+      `[SuperOps] Raw tickets from API: ${tickets.length} | cutoff: ${new Date(cutoff).toISOString()} | since: ${since > 0 ? new Date(since).toISOString() : 'first poll (24h)'}`,
+    );
+    if (tickets.length > 0) {
+      console.log(
+        `[SuperOps] Sample createdTime values: ${tickets.slice(0, 3).map((t) => t.createdTime).join(', ')}`,
+      );
+    }
 
     return tickets.filter((t) => {
       const ts = t.createdTime ? new Date(t.createdTime).getTime() : 0;
