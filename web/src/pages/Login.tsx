@@ -16,7 +16,7 @@ export default function Login() {
     try {
       const res = await login(email, password);
       localStorage.setItem('swoop_token', res.data.token);
-      navigate('/dashboard');
+      window.location.assign('/dashboard');
     } catch (err: any) {
       setError(err.response?.data?.error || 'Login failed');
     } finally {
