@@ -68,6 +68,8 @@ async function runAllTenants(): Promise<void> {
 }
 
 async function pollTenant(tenant: Tenant): Promise<void> {
+  const pollStartedAt = Date.now(); // capture before any async work
+
   const enabledClients = await db
     .select()
     .from(clients)
@@ -98,9 +100,10 @@ async function pollTenant(tenant: Tenant): Promise<void> {
     await processTicket(ticket, tenant, enabledClients, superops);
   }
 
+  // Use poll start time so tickets created DURING a slow AI call are still in the next window
   await db
     .update(tenants)
-    .set({ lastPolledAt: Date.now() })
+    .set({ lastPolledAt: pollStartedAt })
     .where(eq(tenants.id, tenant.id));
 }
 
