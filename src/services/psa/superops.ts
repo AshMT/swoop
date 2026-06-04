@@ -49,12 +49,16 @@ export class SuperOpsClient implements PSAClient {
   readonly endpoint: string;
 
   constructor(subdomain: string, apiKey: string) {
-    // Strip accidental full URL if user pastes it
-    const clean = subdomain
+    // Strip protocol and any path, keeping only the hostname
+    const host = subdomain
       .replace(/^https?:\/\//, '')
-      .replace(/\.superops\.ai.*$/, '')
+      .replace(/\/.*$/, '')
       .trim();
-    this.endpoint = `https://${clean}.superops.ai/graphql`;
+    // If it already contains a dot it's a custom domain (e.g. mighty.it),
+    // otherwise treat it as a superops.ai subdomain (e.g. mightyit → mightyit.superops.ai)
+    this.endpoint = host.includes('.')
+      ? `https://${host}/graphql`
+      : `https://${host}.superops.ai/graphql`;
     this.client = new GraphQLClient(this.endpoint, {
       headers: {
         Authorization: `Bearer ${apiKey}`,

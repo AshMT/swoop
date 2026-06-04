@@ -41,7 +41,8 @@ export default function Settings() {
   const handleSubdomainChange = (val: string) => {
     const clean = val
       .replace(/^https?:\/\//, '')
-      .replace(/\.superops\.ai.*$/, '');
+      .replace(/\/.*$/, '')
+      .trim();
     setSubdomain(clean);
     setSuperopsTest(null);
   };
@@ -141,7 +142,7 @@ export default function Settings() {
               placeholder="yourcompany"
               className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-swoop-500"
             />
-            <p className="text-xs text-gray-400 mt-1">Just the subdomain — e.g. <code>mightyit</code> not <code>mightyit.superops.ai</code></p>
+            <p className="text-xs text-gray-400 mt-1">Subdomain (e.g. <code>mightyit</code>) or custom domain (e.g. <code>mighty.it</code>)</p>
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">API Key <span className="text-gray-400 font-normal">(leave blank to keep existing)</span></label>
