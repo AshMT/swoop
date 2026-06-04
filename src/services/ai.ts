@@ -73,6 +73,7 @@ export async function classifyTicket(
   try {
     const response = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
+      signal: AbortSignal.timeout(300_000), // 5 min — large local models can be slow
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`,

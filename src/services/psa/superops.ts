@@ -35,6 +35,15 @@ const ADD_NOTE_MUTATION = `
   }
 `;
 
+// Introspect CreateTicketNoteInput to discover real field names (logged once at startup)
+const INTROSPECT_NOTE_INPUT = `
+  query IntrospectNoteInput {
+    __type(name: "CreateTicketNoteInput") {
+      inputFields { name }
+    }
+  }
+`;
+
 // Introspection-safe test — asks for schema metadata, never fails on missing fields
 const TEST_QUERY = `
   query TestConnection {
@@ -88,10 +97,21 @@ export class SuperOpsClient implements PSAClient {
     });
   }
 
+  async logNoteInputFields(): Promise<void> {
+    try {
+      const data = await this.client.request<{ __type: { inputFields: { name: string }[] } }>(INTROSPECT_NOTE_INPUT);
+      const fields = data.__type?.inputFields?.map((f) => f.name) || [];
+      console.log('[SuperOps] CreateTicketNoteInput fields:', fields.join(', '));
+    } catch {
+      // non-critical
+    }
+  }
+
   async addTicketNote(ticketId: string, note: string, isPrivate: boolean): Promise<void> {
     await this.client.request(ADD_NOTE_MUTATION, {
       input: {
-        ticketId,
+        // SuperOps uses ticketIdentifier (TicketIdentifierInput) not a flat ticketId field
+        ticketIdentifier: { ticketId },
         content: note,
         privacyType: isPrivate ? 'PRIVATE' : 'PUBLIC',
       },
