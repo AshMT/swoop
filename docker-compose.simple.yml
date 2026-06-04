@@ -1,7 +1,11 @@
 version: '3.8'
 
+# Build locally:  docker compose -f docker-compose.simple.yml up --build
+# Pull from GHCR: SWOOP_IMAGE=ghcr.io/ashmt/swoop:latest docker compose -f docker-compose.simple.yml up
+
 services:
   app:
+    image: ${SWOOP_IMAGE:-swoop-local}
     build: .
     ports:
       - "3000:3000"
