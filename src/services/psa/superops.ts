@@ -12,7 +12,6 @@ const GET_TICKETS_QUERY = `
       tickets {
         ticketId
         subject
-        description
         status
         priority
         createdTime

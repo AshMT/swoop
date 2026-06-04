@@ -127,7 +127,7 @@ async function processTicket(
     const result = await classifyTicket(
       {
         subject: ticket.subject,
-        description: ticket.description || '',
+        description: '',
         requesterEmail,
       },
       {
@@ -157,7 +157,7 @@ async function processTicket(
     clientId: matchedClient.id,
     ticketId,
     ticketSubject: ticket.subject,
-    ticketBody: ticket.description || null,
+    ticketBody: null,
     requesterEmail: requesterEmail || null,
     classification: classification.classification,
     confidence: classification.confidence,

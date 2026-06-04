@@ -58,7 +58,6 @@ export interface ProcessedTicket {
 export interface SuperOpsTicket {
   ticketId: string;
   subject: string;
-  description?: string;
   status: string;
   priority?: string;
   createdTime: string; // ISO datetime string from SuperOps
