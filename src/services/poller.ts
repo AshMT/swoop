@@ -83,8 +83,11 @@ async function pollTenant(tenant: Tenant): Promise<void> {
 
   const superops = new SuperOpsClient(tenant.superopsSubdomain, apiKey, tenant.superopsRegion || 'us');
 
-  // Log CreateTicketNoteInput fields once so we can verify the mutation field names
-  if (!tenant.lastPolledAt) void superops.logNoteInputFields();
+  // Log input type fields once so we can verify field names against the live schema
+  if (!tenant.lastPolledAt) {
+    void superops.logNoteInputFields();
+    void superops.logListInputFields();
+  }
 
   let tickets: SuperOpsTicket[];
   try {

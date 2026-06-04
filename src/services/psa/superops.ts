@@ -44,6 +44,15 @@ const INTROSPECT_NOTE_INPUT = `
   }
 `;
 
+// Introspect ListInfoInput to discover sort/filter field names
+const INTROSPECT_LIST_INPUT = `
+  query IntrospectListInput {
+    __type(name: "ListInfoInput") {
+      inputFields { name }
+    }
+  }
+`;
+
 // Introspection-safe test — asks for schema metadata, never fails on missing fields
 const TEST_QUERY = `
   query TestConnection {
@@ -72,17 +81,23 @@ export class SuperOpsClient implements PSAClient {
   }
 
   async pollNewTickets(since: number): Promise<SuperOpsTicket[]> {
-    // Fetch latest 100 tickets without a server-side date filter (ListInfoInput filter
-    // field name is undocumented and causes validation errors). We filter by createdTime
-    // in the caller instead — the dedup ledger ensures we never reprocess a ticket.
-    const data = await this.client.request<{
-      getTicketList: { tickets: SuperOpsTicket[]; listInfo: { totalCount: number } }
-    }>(GET_TICKETS_QUERY, {
-      input: {
-        page: 1,
-        pageSize: 100,
-      },
-    });
+    // Fetch newest 100 tickets, sorted descending so page 1 is always the most recent.
+    // Try sortBy/sortOrder first (most common GraphQL convention). If those field names are
+    // invalid the API will throw a validation error — we catch it and fall back to no sort
+    // (which returns oldest-first, only useful when the account has <100 tickets total).
+    type ListResult = { getTicketList: { tickets: SuperOpsTicket[]; listInfo: { totalCount: number } } };
+    let data: ListResult;
+    try {
+      data = await this.client.request<ListResult>(GET_TICKETS_QUERY, {
+        input: { page: 1, pageSize: 100, sortBy: 'createdTime', sortOrder: 'DESC' },
+      });
+      console.log('[SuperOps] Sort DESC applied (sortBy/sortOrder)');
+    } catch (sortErr) {
+      console.warn('[SuperOps] sortBy/sortOrder rejected, falling back to default sort:', (sortErr as Error).message?.slice(0, 120));
+      data = await this.client.request<ListResult>(GET_TICKETS_QUERY, {
+        input: { page: 1, pageSize: 100 },
+      });
+    }
 
     const tickets = data.getTicketList?.tickets || [];
 
@@ -111,6 +126,16 @@ export class SuperOpsClient implements PSAClient {
       const data = await this.client.request<{ __type: { inputFields: { name: string }[] } }>(INTROSPECT_NOTE_INPUT);
       const fields = data.__type?.inputFields?.map((f) => f.name) || [];
       console.log('[SuperOps] CreateTicketNoteInput fields:', fields.join(', '));
+    } catch {
+      // non-critical
+    }
+  }
+
+  async logListInputFields(): Promise<void> {
+    try {
+      const data = await this.client.request<{ __type: { inputFields: { name: string }[] } }>(INTROSPECT_LIST_INPUT);
+      const fields = data.__type?.inputFields?.map((f) => f.name) || [];
+      console.log('[SuperOps] ListInfoInput fields:', fields.join(', '));
     } catch {
       // non-critical
     }
