@@ -44,15 +44,6 @@ const INTROSPECT_NOTE_INPUT = `
   }
 `;
 
-// Introspect ListInfoInput to discover sort/filter field names
-const INTROSPECT_LIST_INPUT = `
-  query IntrospectListInput {
-    __type(name: "ListInfoInput") {
-      inputFields { name }
-    }
-  }
-`;
-
 // Introspection-safe test — asks for schema metadata, never fails on missing fields
 const TEST_QUERY = `
   query TestConnection {
@@ -81,44 +72,54 @@ export class SuperOpsClient implements PSAClient {
   }
 
   async pollNewTickets(since: number): Promise<SuperOpsTicket[]> {
-    // Fetch newest 100 tickets, sorted descending so page 1 is always the most recent.
-    // Try sortBy/sortOrder first (most common GraphQL convention). If those field names are
-    // invalid the API will throw a validation error — we catch it and fall back to no sort
-    // (which returns oldest-first, only useful when the account has <100 tickets total).
-    type ListResult = { getTicketList: { tickets: SuperOpsTicket[]; listInfo: { totalCount: number } } };
-    let data: ListResult;
-    try {
-      data = await this.client.request<ListResult>(GET_TICKETS_QUERY, {
-        input: { page: 1, pageSize: 100, sortColumn: 'createdTime', sortOrder: 'DESC' },
-      });
-      console.log('[SuperOps] Sort DESC applied (sortColumn/sortOrder)');
-    } catch (sortErr) {
-      console.warn('[SuperOps] sortColumn/sortOrder rejected, falling back to default sort:', (sortErr as Error).message?.slice(0, 120));
-      data = await this.client.request<ListResult>(GET_TICKETS_QUERY, {
-        input: { page: 1, pageSize: 100 },
-      });
-    }
-
-    const tickets = data.getTicketList?.tickets || [];
-
+    // The SuperOps API returns tickets sorted oldest-first with no working sort parameter.
+    // We use reverse pagination: fetch page 1 to get totalCount, then fetch the last page
+    // which contains the newest tickets. The dedup table prevents double-processing.
+    type ListResult = {
+      getTicketList: { tickets: SuperOpsTicket[]; listInfo: { totalCount: number } };
+    };
+    const PAGE_SIZE = 100;
     const OVERLAP_MS = 10 * 60 * 1000;
     const cutoff = since > 0
       ? since - OVERLAP_MS
       : Date.now() - 24 * 60 * 60 * 1000;
 
+    // Step 1: fetch page 1 to get totalCount (reuse its tickets if it's the only page)
+    const firstPage = await this.client.request<ListResult>(GET_TICKETS_QUERY, {
+      input: { page: 1, pageSize: PAGE_SIZE },
+    });
+    const totalCount = firstPage.getTicketList?.listInfo?.totalCount ?? 0;
+    const lastPage = totalCount > 0 ? Math.ceil(totalCount / PAGE_SIZE) : 1;
+
     console.log(
-      `[SuperOps] Raw tickets from API: ${tickets.length} | cutoff: ${new Date(cutoff).toISOString()} | since: ${since > 0 ? new Date(since).toISOString() : 'first poll (24h)'}`,
+      `[SuperOps] totalCount: ${totalCount} | lastPage: ${lastPage} | cutoff: ${new Date(cutoff).toISOString()} | since: ${since > 0 ? new Date(since).toISOString() : 'first poll (24h)'}`,
     );
+
+    let tickets: SuperOpsTicket[];
+    if (lastPage <= 1) {
+      tickets = firstPage.getTicketList?.tickets || [];
+      console.log(`[SuperOps] Single page — using page 1 results (${tickets.length} tickets)`);
+    } else {
+      // Step 2: fetch the last page — newest tickets on an oldest-first list
+      const lastPageData = await this.client.request<ListResult>(GET_TICKETS_QUERY, {
+        input: { page: lastPage, pageSize: PAGE_SIZE },
+      });
+      tickets = lastPageData.getTicketList?.tickets || [];
+      console.log(`[SuperOps] Fetched page ${lastPage}/${lastPage} — ${tickets.length} ticket(s)`);
+    }
+
     if (tickets.length > 0) {
       console.log(
         `[SuperOps] Sample createdTime values: ${tickets.slice(0, 3).map((t) => t.createdTime).join(', ')}`,
       );
     }
 
-    return tickets.filter((t) => {
+    const filtered = tickets.filter((t) => {
       const ts = t.createdTime ? new Date(t.createdTime).getTime() : 0;
       return ts > cutoff;
     });
+    console.log(`[SuperOps] After cutoff filter: ${filtered.length} new ticket(s)`);
+    return filtered;
   }
 
   async logNoteInputFields(): Promise<void> {
@@ -126,16 +127,6 @@ export class SuperOpsClient implements PSAClient {
       const data = await this.client.request<{ __type: { inputFields: { name: string }[] } }>(INTROSPECT_NOTE_INPUT);
       const fields = data.__type?.inputFields?.map((f) => f.name) || [];
       console.log('[SuperOps] CreateTicketNoteInput fields:', fields.join(', '));
-    } catch {
-      // non-critical
-    }
-  }
-
-  async logListInputFields(): Promise<void> {
-    try {
-      const data = await this.client.request<{ __type: { inputFields: { name: string }[] } }>(INTROSPECT_LIST_INPUT);
-      const fields = data.__type?.inputFields?.map((f) => f.name) || [];
-      console.log('[SuperOps] ListInfoInput fields:', fields.join(', '));
     } catch {
       // non-critical
     }
