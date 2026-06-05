@@ -72,49 +72,48 @@ export class SuperOpsClient implements PSAClient {
   }
 
   async pollNewTickets(since: number): Promise<SuperOpsTicket[]> {
-    // The SuperOps API returns tickets sorted oldest-first with no working sort parameter.
-    // We use reverse pagination: fetch page 1 to get totalCount, then fetch the last page
-    // which contains the newest tickets. The dedup table prevents double-processing.
+    // The SuperOps API has no working sort or date filter, and the default sort order
+    // does not correlate with createdTime (tickets may be imported with historical dates,
+    // putting them on any page). We must scan all pages to find recently-created tickets.
     type ListResult = {
       getTicketList: { tickets: SuperOpsTicket[]; listInfo: { totalCount: number } };
     };
     const PAGE_SIZE = 100;
+    const MAX_PAGES = 20; // safety cap — handles accounts up to 2000 tickets
     const OVERLAP_MS = 10 * 60 * 1000;
     const cutoff = since > 0
       ? since - OVERLAP_MS
       : Date.now() - 24 * 60 * 60 * 1000;
 
-    // Step 1: fetch page 1 to get totalCount (reuse its tickets if it's the only page)
-    const firstPage = await this.client.request<ListResult>(GET_TICKETS_QUERY, {
-      input: { page: 1, pageSize: PAGE_SIZE },
-    });
-    const totalCount = firstPage.getTicketList?.listInfo?.totalCount ?? 0;
-    const lastPage = totalCount > 0 ? Math.ceil(totalCount / PAGE_SIZE) : 1;
+    const allTickets: SuperOpsTicket[] = [];
+    let totalCount = 0;
 
-    console.log(
-      `[SuperOps] totalCount: ${totalCount} | lastPage: ${lastPage} | cutoff: ${new Date(cutoff).toISOString()} | since: ${since > 0 ? new Date(since).toISOString() : 'first poll (24h)'}`,
-    );
-
-    let tickets: SuperOpsTicket[];
-    if (lastPage <= 1) {
-      tickets = firstPage.getTicketList?.tickets || [];
-      console.log(`[SuperOps] Single page — using page 1 results (${tickets.length} tickets)`);
-    } else {
-      // Step 2: fetch the last page — newest tickets on an oldest-first list
-      const lastPageData = await this.client.request<ListResult>(GET_TICKETS_QUERY, {
-        input: { page: lastPage, pageSize: PAGE_SIZE },
+    for (let page = 1; page <= MAX_PAGES; page++) {
+      const data = await this.client.request<ListResult>(GET_TICKETS_QUERY, {
+        input: { page, pageSize: PAGE_SIZE },
       });
-      tickets = lastPageData.getTicketList?.tickets || [];
-      console.log(`[SuperOps] Fetched page ${lastPage}/${lastPage} — ${tickets.length} ticket(s)`);
+      const pageTickets = data.getTicketList?.tickets || [];
+      totalCount = data.getTicketList?.listInfo?.totalCount ?? 0;
+      allTickets.push(...pageTickets);
+
+      if (allTickets.length >= totalCount || pageTickets.length < PAGE_SIZE) break;
     }
 
-    if (tickets.length > 0) {
+    if (allTickets.length >= MAX_PAGES * PAGE_SIZE && allTickets.length < totalCount) {
+      console.warn(`[SuperOps] Hit ${MAX_PAGES}-page cap — ${totalCount - allTickets.length} tickets not scanned`);
+    }
+
+    console.log(
+      `[SuperOps] Scanned ${allTickets.length}/${totalCount} tickets | cutoff: ${new Date(cutoff).toISOString()} | since: ${since > 0 ? new Date(since).toISOString() : 'first poll (24h)'}`,
+    );
+
+    if (allTickets.length > 0) {
       console.log(
-        `[SuperOps] Sample createdTime values: ${tickets.slice(0, 3).map((t) => t.createdTime).join(', ')}`,
+        `[SuperOps] Sample createdTime values: ${allTickets.slice(0, 3).map((t) => t.createdTime).join(', ')}`,
       );
     }
 
-    const filtered = tickets.filter((t) => {
+    const filtered = allTickets.filter((t) => {
       const ts = t.createdTime ? new Date(t.createdTime).getTime() : 0;
       return ts > cutoff;
     });
