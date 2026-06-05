@@ -71,19 +71,18 @@ export class SuperOpsClient implements PSAClient {
     });
   }
 
-  async pollNewTickets(since: number): Promise<SuperOpsTicket[]> {
-    // The SuperOps API has no working sort or date filter, and the default sort order
-    // does not correlate with createdTime (tickets may be imported with historical dates,
-    // putting them on any page). We must scan all pages to find recently-created tickets.
+  async pollNewTickets(_since: number): Promise<SuperOpsTicket[]> {
+    // The SuperOps API has no working sort or date filter. The `createdTime` field also
+    // does not reliably represent when a ticket entered the system — it can reflect email
+    // timestamps, import dates, or other sources, making it useless as a recency filter.
+    //
+    // We scan all pages and return every ticket. The processedTickets dedup table in
+    // poller.ts is the sole gate: a ticket is "new" if its ID has never been seen before.
     type ListResult = {
       getTicketList: { tickets: SuperOpsTicket[]; listInfo: { totalCount: number } };
     };
     const PAGE_SIZE = 100;
     const MAX_PAGES = 20; // safety cap — handles accounts up to 2000 tickets
-    const OVERLAP_MS = 10 * 60 * 1000;
-    const cutoff = since > 0
-      ? since - OVERLAP_MS
-      : Date.now() - 24 * 60 * 60 * 1000;
 
     const allTickets: SuperOpsTicket[] = [];
     let totalCount = 0;
@@ -103,22 +102,8 @@ export class SuperOpsClient implements PSAClient {
       console.warn(`[SuperOps] Hit ${MAX_PAGES}-page cap — ${totalCount - allTickets.length} tickets not scanned`);
     }
 
-    console.log(
-      `[SuperOps] Scanned ${allTickets.length}/${totalCount} tickets | cutoff: ${new Date(cutoff).toISOString()} | since: ${since > 0 ? new Date(since).toISOString() : 'first poll (24h)'}`,
-    );
-
-    if (allTickets.length > 0) {
-      console.log(
-        `[SuperOps] Sample createdTime values: ${allTickets.slice(0, 3).map((t) => t.createdTime).join(', ')}`,
-      );
-    }
-
-    const filtered = allTickets.filter((t) => {
-      const ts = t.createdTime ? new Date(t.createdTime).getTime() : 0;
-      return ts > cutoff;
-    });
-    console.log(`[SuperOps] After cutoff filter: ${filtered.length} new ticket(s)`);
-    return filtered;
+    console.log(`[SuperOps] Scanned ${allTickets.length}/${totalCount} tickets`);
+    return allTickets;
   }
 
   async logNoteInputFields(): Promise<void> {

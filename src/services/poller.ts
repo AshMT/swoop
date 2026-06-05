@@ -91,13 +91,15 @@ async function pollTenant(tenant: Tenant): Promise<void> {
 
   let tickets: SuperOpsTicket[];
   try {
+    // since param kept for interface compatibility but is no longer used for filtering;
+    // dedup via processedTickets table is the sole gate against reprocessing
     tickets = await superops.pollNewTickets(tenant.lastPolledAt || 0);
   } catch (err) {
     console.error(`[Poller] SuperOps poll failed for tenant "${tenant.name}":`, err);
     return;
   }
 
-  console.log(`[Poller] Tenant "${tenant.name}": ${tickets.length} ticket(s) fetched`);
+  console.log(`[Poller] Tenant "${tenant.name}": ${tickets.length} total ticket(s) to check`);
 
   for (const ticket of tickets) {
     await processTicket(ticket, tenant, enabledClients, superops);
