@@ -54,6 +54,17 @@ export const setupClient = (tenantId: string, name: string, superopsCompanyId?: 
 // ─── Tenants ──────────────────────────────────────────────────────────────────
 export const getTenants = () => api.get<Tenant[]>('/tenants');
 
+export const updateTenant = (id: string, data: {
+  cippBaseUrl?: string | null;
+  cippApiKey?: string | null;
+  aiBaseUrl?: string | null;
+  aiApiKey?: string | null;
+  aiModel?: string | null;
+}) => api.patch(`/tenants/${id}`, data);
+
+export const testCipp = (tenantId: string) =>
+  api.post<{ ok: boolean; error?: string }>(`/tenants/${tenantId}/test-cipp`);
+
 // ─── Clients ──────────────────────────────────────────────────────────────────
 export const getClients = (tenantId?: string) =>
   api.get<Client[]>('/clients', { params: tenantId ? { tenantId } : undefined });
@@ -62,6 +73,7 @@ export const createClient = (data: {
   tenantId: string;
   name: string;
   superopsCompanyId?: string;
+  cippTenantId?: string;
   automationEnabled?: boolean;
 }) => api.post<Client>('/clients', data);
 
@@ -77,6 +89,14 @@ export const getActions = (params?: { clientId?: string; tenantId?: string; clas
 export const getActionStats = (tenantId?: string) =>
   api.get<ActionStats>('/actions/stats', { params: tenantId ? { tenantId } : undefined });
 
+export const approveAction = (id: string) => api.post<ActionLog>(`/actions/${id}/approve`);
+
+export const rejectAction = (id: string, reason?: string) =>
+  api.post<ActionLog>(`/actions/${id}/reject`, { reason });
+
+export const getExecutionLog = (actionId: string) =>
+  api.get<ExecutionLog>(`/actions/${actionId}/execution`);
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 export interface Tenant {
   id: string;
@@ -86,6 +106,7 @@ export interface Tenant {
   superopsRegion: string | null;
   aiBaseUrl: string | null;
   aiModel: string | null;
+  cippBaseUrl: string | null;
   lastPolledAt: number | null;
   createdAt: number | null;
 }
@@ -95,6 +116,7 @@ export interface Client {
   tenantId: string;
   name: string;
   superopsCompanyId: string | null;
+  cippTenantId: string | null;
   automationEnabled: boolean;
   createdAt: number | null;
 }
@@ -115,7 +137,19 @@ export interface ActionLog {
   followUpQuestion: string | null;
   proposedPsaNote: string | null;
   status: string | null;
+  approvedBy: string | null;
+  approvedAt: number | null;
+  rejectionReason: string | null;
   createdAt: number | null;
+}
+
+export interface ExecutionLog {
+  id: string;
+  actionLogId: string | null;
+  executedAt: number | null;
+  result: string | null;
+  response: string | null;
+  error: string | null;
 }
 
 export interface ActionStats {

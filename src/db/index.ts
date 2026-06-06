@@ -38,6 +38,8 @@ export function initializeDatabase(): void {
       ai_base_url TEXT,
       ai_api_key TEXT,
       ai_model TEXT,
+      cipp_base_url TEXT,
+      cipp_api_key TEXT,
       last_polled_at INTEGER,
       created_at INTEGER DEFAULT (unixepoch())
     );
@@ -47,6 +49,7 @@ export function initializeDatabase(): void {
       tenant_id TEXT REFERENCES tenants(id),
       name TEXT NOT NULL,
       superops_company_id TEXT,
+      cipp_tenant_id TEXT,
       automation_enabled INTEGER DEFAULT 0,
       created_at INTEGER DEFAULT (unixepoch())
     );
@@ -67,8 +70,20 @@ export function initializeDatabase(): void {
       follow_up_question TEXT,
       proposed_psa_note TEXT,
       raw_ai_response TEXT,
-      status TEXT DEFAULT 'pending',
+      status TEXT DEFAULT 'awaiting_approval',
+      approved_by TEXT,
+      approved_at INTEGER,
+      rejection_reason TEXT,
       created_at INTEGER DEFAULT (unixepoch())
+    );
+
+    CREATE TABLE IF NOT EXISTS execution_logs (
+      id TEXT PRIMARY KEY,
+      action_log_id TEXT REFERENCES action_logs(id),
+      executed_at INTEGER DEFAULT (unixepoch()),
+      result TEXT,
+      response TEXT,
+      error TEXT
     );
 
     CREATE TABLE IF NOT EXISTS processed_tickets (
@@ -83,8 +98,22 @@ export function initializeDatabase(): void {
   // so we ignore the error and treat it as a no-op.
   const migrations = [
     `ALTER TABLE tenants ADD COLUMN superops_region TEXT DEFAULT 'us'`,
+    `ALTER TABLE tenants ADD COLUMN cipp_base_url TEXT`,
+    `ALTER TABLE tenants ADD COLUMN cipp_api_key TEXT`,
+    `ALTER TABLE clients ADD COLUMN cipp_tenant_id TEXT`,
+    `ALTER TABLE action_logs ADD COLUMN approved_by TEXT`,
+    `ALTER TABLE action_logs ADD COLUMN approved_at INTEGER`,
+    `ALTER TABLE action_logs ADD COLUMN rejection_reason TEXT`,
+    `CREATE TABLE IF NOT EXISTS execution_logs (
+      id TEXT PRIMARY KEY,
+      action_log_id TEXT REFERENCES action_logs(id),
+      executed_at INTEGER DEFAULT (unixepoch()),
+      result TEXT,
+      response TEXT,
+      error TEXT
+    )`,
   ];
   for (const sql of migrations) {
-    try { sqlite.exec(sql); } catch { /* column already exists */ }
+    try { sqlite.exec(sql); } catch { /* already exists */ }
   }
 }

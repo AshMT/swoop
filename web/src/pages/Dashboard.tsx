@@ -1,6 +1,9 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { getActions, getActionStats, getClients, getTenants, type ActionLog, type Client } from '../api';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import {
+  getActions, getActionStats, getClients, getTenants, approveAction, rejectAction, getExecutionLog,
+  type ActionLog, type Client, type ExecutionLog,
+} from '../api';
 
 const CLASSIFICATION_COLORS: Record<string, string> = {
   password_reset: 'bg-blue-100 text-blue-700',
@@ -16,11 +19,31 @@ const CLASSIFICATION_COLORS: Record<string, string> = {
   FOLLOW_UP: 'bg-amber-100 text-amber-800',
 };
 
+const STATUS_COLORS: Record<string, string> = {
+  awaiting_approval: 'bg-amber-100 text-amber-700',
+  executing: 'bg-blue-100 text-blue-700',
+  executed: 'bg-green-100 text-green-700',
+  failed: 'bg-red-100 text-red-700',
+  rejected: 'bg-gray-100 text-gray-500',
+  escalated: 'bg-red-100 text-red-800',
+  follow_up: 'bg-amber-100 text-amber-800',
+};
+
 function ClassificationBadge({ cls }: { cls: string | null }) {
   const color = cls ? (CLASSIFICATION_COLORS[cls] || 'bg-gray-100 text-gray-700') : 'bg-gray-100 text-gray-500';
   return (
     <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${color}`}>
       {cls || 'unknown'}
+    </span>
+  );
+}
+
+function StatusBadge({ status }: { status: string | null }) {
+  const s = status || 'unknown';
+  const color = STATUS_COLORS[s] || 'bg-gray-100 text-gray-600';
+  return (
+    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${color}`}>
+      {s.replace(/_/g, ' ')}
     </span>
   );
 }
@@ -41,7 +64,34 @@ function ConfidenceBar({ value }: { value: number | null }) {
 
 function ActionRow({ log, client }: { log: ActionLog; client?: Client }) {
   const [expanded, setExpanded] = useState(false);
-  const entities = log.entities ? JSON.parse(log.entities) : {};
+  const [rejectReason, setRejectReason] = useState('');
+  const [showRejectForm, setShowRejectForm] = useState(false);
+  const queryClient = useQueryClient();
+  const entities = log.entities ? (() => { try { return JSON.parse(log.entities!); } catch { return {}; } })() : {};
+
+  const { data: executionLog } = useQuery<ExecutionLog>({
+    queryKey: ['execution', log.id],
+    queryFn: () => getExecutionLog(log.id).then((r) => r.data),
+    enabled: expanded && (log.status === 'executed' || log.status === 'failed'),
+    retry: false,
+  });
+
+  const invalidate = () => {
+    void queryClient.invalidateQueries({ queryKey: ['actions'] });
+    void queryClient.invalidateQueries({ queryKey: ['stats'] });
+  };
+
+  const approveMutation = useMutation({
+    mutationFn: () => approveAction(log.id),
+    onSuccess: invalidate,
+  });
+
+  const rejectMutation = useMutation({
+    mutationFn: () => rejectAction(log.id, rejectReason || undefined),
+    onSuccess: () => { invalidate(); setShowRejectForm(false); setRejectReason(''); },
+  });
+
+  const isActionable = log.status === 'awaiting_approval';
 
   return (
     <>
@@ -59,13 +109,7 @@ function ActionRow({ log, client }: { log: ActionLog; client?: Client }) {
         <td className="px-4 py-3 text-sm text-gray-600 whitespace-nowrap">{client?.name || '—'}</td>
         <td className="px-4 py-3 whitespace-nowrap"><ClassificationBadge cls={log.classification} /></td>
         <td className="px-4 py-3 whitespace-nowrap"><ConfidenceBar value={log.confidence} /></td>
-        <td className="px-4 py-3 whitespace-nowrap">
-          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
-            log.status === 'pending' ? 'bg-gray-100 text-gray-600' : 'bg-blue-100 text-blue-700'
-          }`}>
-            {log.status || 'pending'}
-          </span>
-        </td>
+        <td className="px-4 py-3 whitespace-nowrap"><StatusBadge status={log.status} /></td>
         <td className="px-4 py-3 text-xs text-gray-400 whitespace-nowrap">
           {log.createdAt ? new Date(log.createdAt * 1000).toLocaleString() : '—'}
         </td>
@@ -103,6 +147,81 @@ function ActionRow({ log, client }: { log: ActionLog; client?: Client }) {
                   <pre className="text-xs text-gray-600 bg-white border border-gray-200 rounded-lg p-3 whitespace-pre-wrap font-mono leading-relaxed overflow-auto max-h-48">
                     {log.proposedPsaNote}
                   </pre>
+                </div>
+              )}
+
+              {/* Execution result */}
+              {executionLog && (
+                <div className="md:col-span-2">
+                  <h4 className="font-medium text-gray-700 mb-1">Execution result</h4>
+                  <div className={`rounded-lg border p-3 text-xs ${executionLog.result === 'success' ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}`}>
+                    <div className="font-medium mb-1">{executionLog.result === 'success' ? 'Success' : 'Failed'}</div>
+                    {executionLog.error && <div className="text-red-700">Error: {executionLog.error}</div>}
+                    {executionLog.response && (
+                      <pre className="mt-1 text-gray-600 whitespace-pre-wrap overflow-auto max-h-32">{executionLog.response}</pre>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Rejection info */}
+              {log.status === 'rejected' && (
+                <div className="md:col-span-2 text-xs text-gray-500">
+                  Rejected by {log.approvedBy || 'unknown'}
+                  {log.rejectionReason && <> — <span className="italic">{log.rejectionReason}</span></>}
+                </div>
+              )}
+
+              {/* Approve / Reject actions */}
+              {isActionable && (
+                <div className="md:col-span-2" onClick={(e) => e.stopPropagation()}>
+                  {!showRejectForm ? (
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => approveMutation.mutate()}
+                        disabled={approveMutation.isPending}
+                        className="px-4 py-2 bg-green-600 text-white text-sm rounded-lg hover:bg-green-700 disabled:opacity-50 font-medium"
+                      >
+                        {approveMutation.isPending ? 'Executing...' : 'Approve & Execute'}
+                      </button>
+                      <button
+                        onClick={() => setShowRejectForm(true)}
+                        className="px-4 py-2 bg-white text-gray-700 text-sm rounded-lg border border-gray-300 hover:bg-gray-50 font-medium"
+                      >
+                        Reject
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col gap-2 max-w-sm">
+                      <input
+                        type="text"
+                        placeholder="Rejection reason (optional)"
+                        value={rejectReason}
+                        onChange={(e) => setRejectReason(e.target.value)}
+                        className="px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-swoop-500"
+                      />
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => rejectMutation.mutate()}
+                          disabled={rejectMutation.isPending}
+                          className="px-4 py-2 bg-red-600 text-white text-sm rounded-lg hover:bg-red-700 disabled:opacity-50 font-medium"
+                        >
+                          {rejectMutation.isPending ? 'Rejecting...' : 'Confirm Reject'}
+                        </button>
+                        <button
+                          onClick={() => { setShowRejectForm(false); setRejectReason(''); }}
+                          className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  {approveMutation.isError && (
+                    <p className="text-red-600 text-xs mt-2">
+                      {(approveMutation.error as Error)?.message || 'Failed to execute action'}
+                    </p>
+                  )}
                 </div>
               )}
             </div>
@@ -150,13 +269,14 @@ export default function Dashboard() {
   for (const c of clients) clientMap[c.id] = c;
 
   const classifications = Object.keys(stats?.byClassification || {});
+  const pendingApproval = actions.filter((a) => a.status === 'awaiting_approval').length;
 
   return (
     <div className="p-6">
       {/* Header */}
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
-        <p className="text-gray-500 text-sm mt-1">Recent AI classifications — read-only Phase 1</p>
+        <p className="text-gray-500 text-sm mt-1">AI-classified tickets — review and approve M365 actions</p>
       </div>
 
       {/* Stats */}
@@ -164,15 +284,15 @@ export default function Dashboard() {
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
           <div className="bg-white rounded-xl border border-gray-200 p-4">
             <div className="text-2xl font-bold text-gray-900">{stats.total}</div>
-            <div className="text-xs text-gray-500 mt-1">Total tickets processed</div>
+            <div className="text-xs text-gray-500 mt-1">Total processed</div>
+          </div>
+          <div className="bg-white rounded-xl border border-amber-200 p-4">
+            <div className="text-2xl font-bold text-amber-600">{pendingApproval}</div>
+            <div className="text-xs text-gray-500 mt-1">Awaiting approval</div>
           </div>
           <div className="bg-white rounded-xl border border-gray-200 p-4">
             <div className="text-2xl font-bold text-red-600">{stats.byClassification['ESCALATE'] || 0}</div>
             <div className="text-xs text-gray-500 mt-1">Escalated</div>
-          </div>
-          <div className="bg-white rounded-xl border border-gray-200 p-4">
-            <div className="text-2xl font-bold text-amber-600">{stats.byClassification['FOLLOW_UP'] || 0}</div>
-            <div className="text-xs text-gray-500 mt-1">Need follow-up</div>
           </div>
           <div className="bg-white rounded-xl border border-gray-200 p-4">
             <div className="text-2xl font-bold text-red-700">{stats.highSensitivity}</div>

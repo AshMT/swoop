@@ -7,6 +7,7 @@ export default function Clients() {
   const [showAdd, setShowAdd] = useState(false);
   const [newName, setNewName] = useState('');
   const [newCompanyId, setNewCompanyId] = useState('');
+  const [newCippTenantId, setNewCippTenantId] = useState('');
   const [newEnabled, setNewEnabled] = useState(false);
   const [addError, setAddError] = useState('');
 
@@ -36,6 +37,7 @@ export default function Clients() {
         tenantId,
         name: newName,
         superopsCompanyId: newCompanyId || undefined,
+        cippTenantId: newCippTenantId || undefined,
         automationEnabled: newEnabled,
       }),
     onSuccess: () => {
@@ -43,6 +45,7 @@ export default function Clients() {
       setShowAdd(false);
       setNewName('');
       setNewCompanyId('');
+      setNewCippTenantId('');
       setNewEnabled(false);
       setAddError('');
     },
@@ -103,6 +106,17 @@ export default function Clients() {
                   placeholder="Optional"
                 />
               </div>
+              <div className="col-span-2">
+                <label className="block text-sm font-medium text-gray-700 mb-1">CIPP Tenant ID</label>
+                <input
+                  type="text"
+                  value={newCippTenantId}
+                  onChange={(e) => setNewCippTenantId(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-swoop-500"
+                  placeholder="contoso.onmicrosoft.com"
+                />
+                <p className="text-xs text-gray-400 mt-1">The M365 tenant domain used by CIPP (e.g. contoso.onmicrosoft.com)</p>
+              </div>
             </div>
             <label className="flex items-center gap-2 cursor-pointer">
               <input
@@ -148,6 +162,7 @@ export default function Clients() {
               <tr className="border-b border-gray-200 bg-gray-50">
                 <th className="px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Client name</th>
                 <th className="px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">SuperOps Company ID</th>
+                <th className="px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">CIPP Tenant ID</th>
                 <th className="px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Automation</th>
                 <th className="px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Added</th>
                 <th className="px-4 py-3"></th>
@@ -159,6 +174,9 @@ export default function Clients() {
                   <td className="px-4 py-3 text-sm font-medium text-gray-900">{client.name}</td>
                   <td className="px-4 py-3 text-sm text-gray-500 font-mono">
                     {client.superopsCompanyId || <span className="text-gray-400 font-sans">—</span>}
+                  </td>
+                  <td className="px-4 py-3 text-sm text-gray-500 font-mono">
+                    {client.cippTenantId || <span className="text-gray-400 font-sans">—</span>}
                   </td>
                   <td className="px-4 py-3">
                     <button

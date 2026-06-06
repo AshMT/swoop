@@ -15,6 +15,8 @@ export interface Tenant {
   aiBaseUrl: string | null;
   aiApiKey: string | null; // encrypted at rest
   aiModel: string | null;
+  cippBaseUrl: string | null;
+  cippApiKey: string | null; // encrypted at rest
   lastPolledAt: number | null;
   createdAt: number | null;
 }
@@ -24,6 +26,7 @@ export interface Client {
   tenantId: string | null;
   name: string;
   superopsCompanyId: string | null;
+  cippTenantId: string | null;
   automationEnabled: boolean | null;
   createdAt: number | null;
 }
@@ -45,7 +48,19 @@ export interface ActionLog {
   proposedPsaNote: string | null;
   rawAiResponse: string | null;
   status: string | null;
+  approvedBy: string | null;
+  approvedAt: number | null;
+  rejectionReason: string | null;
   createdAt: number | null;
+}
+
+export interface ExecutionLog {
+  id: string;
+  actionLogId: string | null;
+  executedAt: number | null;
+  result: string | null; // 'success' | 'failure'
+  response: string | null; // raw JSON from CIPP
+  error: string | null;
 }
 
 export interface ProcessedTicket {

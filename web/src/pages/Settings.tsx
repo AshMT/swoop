@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { getTenants, testSuperOps, testAi, type Tenant } from '../api';
+import { getTenants, testSuperOps, testAi, testCipp, type Tenant } from '../api';
 import api from '../api';
 
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
@@ -25,6 +25,13 @@ export default function Settings() {
   const [aiTesting, setAiTesting] = useState(false);
   const [aiSave, setAiSave] = useState<SaveStatus>('idle');
 
+  // CIPP fields
+  const [cippBaseUrl, setCippBaseUrl] = useState('');
+  const [cippApiKey, setCippApiKey] = useState('');
+  const [cippTest, setCippTest] = useState<TestResult>(null);
+  const [cippTesting, setCippTesting] = useState(false);
+  const [cippSave, setCippSave] = useState<SaveStatus>('idle');
+
   useEffect(() => {
     getTenants()
       .then((res) => {
@@ -35,6 +42,7 @@ export default function Settings() {
           setSuperopsRegion((t.superopsRegion as 'us' | 'eu') || 'us');
           setAiBaseUrl(t.aiBaseUrl || '');
           setAiModel(t.aiModel || '');
+          setCippBaseUrl(t.cippBaseUrl || '');
         }
       })
       .finally(() => setLoading(false));
@@ -111,6 +119,39 @@ export default function Settings() {
     } catch {
       setAiSave('error');
       setTimeout(() => setAiSave('idle'), 3000);
+    }
+  };
+
+  const handleTestCipp = async () => {
+    if (!tenant) return;
+    setCippTesting(true);
+    setCippTest(null);
+    try {
+      const res = await testCipp(tenant.id);
+      setCippTest(res.data);
+    } catch {
+      setCippTest({ ok: false, error: 'Request failed' });
+    } finally {
+      setCippTesting(false);
+    }
+  };
+
+  const handleSaveCipp = async () => {
+    if (!tenant) return;
+    setCippSave('saving');
+    try {
+      const body: Record<string, string | null> = {
+        cippBaseUrl: cippBaseUrl.trim() || null,
+        cippApiKey: cippApiKey.trim() || null,
+      };
+      await api.patch(`/tenants/${tenant.id}`, body);
+      setCippSave('saved');
+      setTenant({ ...tenant, cippBaseUrl: cippBaseUrl.trim() || null });
+      setCippApiKey('');
+      setTimeout(() => setCippSave('idle'), 2500);
+    } catch {
+      setCippSave('error');
+      setTimeout(() => setCippSave('idle'), 3000);
     }
   };
 
@@ -264,6 +305,64 @@ export default function Settings() {
               className="px-4 py-2 text-sm bg-swoop-600 text-white rounded-md hover:bg-swoop-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {aiSave === 'saving' ? 'Saving…' : aiSave === 'saved' ? 'Saved!' : aiSave === 'error' ? 'Error — try again' : 'Save'}
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <hr className="border-gray-200 mb-10" />
+
+      {/* CIPP section */}
+      <section className="mb-10">
+        <h2 className="text-base font-semibold text-gray-800 mb-1">CIPP Integration</h2>
+        <p className="text-sm text-gray-500 mb-4">Connect to your CIPP instance to enable automated M365 action execution.</p>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">CIPP Base URL</label>
+            <input
+              type="url"
+              value={cippBaseUrl}
+              onChange={(e) => { setCippBaseUrl(e.target.value); setCippTest(null); }}
+              placeholder="https://cipp.yourdomain.com"
+              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-swoop-500"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">API Key <span className="text-gray-400 font-normal">(leave blank to keep existing)</span></label>
+            <input
+              type="password"
+              value={cippApiKey}
+              onChange={(e) => { setCippApiKey(e.target.value); setCippTest(null); }}
+              placeholder="Enter CIPP API key"
+              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-swoop-500"
+            />
+          </div>
+
+          {cippTest && (
+            <div className={`rounded-md px-4 py-3 text-sm ${cippTest.ok ? 'bg-green-50 border border-green-200 text-green-800' : 'bg-red-50 border border-red-200 text-red-800'}`}>
+              {cippTest.ok ? 'CIPP connected successfully.' : (
+                <div>
+                  <div className="font-medium">CIPP connection failed</div>
+                  {cippTest.error && <div className="mt-1">{cippTest.error}</div>}
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="flex gap-3">
+            <button
+              onClick={handleTestCipp}
+              disabled={!tenant?.cippBaseUrl || cippTesting}
+              className="px-4 py-2 text-sm border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {cippTesting ? 'Testing…' : 'Test Connection'}
+            </button>
+            <button
+              onClick={handleSaveCipp}
+              disabled={(!cippBaseUrl && !cippApiKey) || cippSave === 'saving'}
+              className="px-4 py-2 text-sm bg-swoop-600 text-white rounded-md hover:bg-swoop-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {cippSave === 'saving' ? 'Saving…' : cippSave === 'saved' ? 'Saved!' : cippSave === 'error' ? 'Error — try again' : 'Save'}
             </button>
           </div>
         </div>

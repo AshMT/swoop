@@ -31,6 +31,7 @@ const createSchema = z.object({
   tenantId: z.string().uuid(),
   name: z.string().min(1),
   superopsCompanyId: z.string().optional(),
+  cippTenantId: z.string().optional(),
   automationEnabled: z.boolean().optional(),
 });
 
@@ -41,7 +42,7 @@ router.post('/', async (req, res) => {
     return;
   }
 
-  const { tenantId, name, superopsCompanyId, automationEnabled } = parsed.data;
+  const { tenantId, name, superopsCompanyId, cippTenantId, automationEnabled } = parsed.data;
 
   // Verify tenant exists
   const [tenant] = await db.select({ id: tenants.id }).from(tenants).where(eq(tenants.id, tenantId)).limit(1);
@@ -56,6 +57,7 @@ router.post('/', async (req, res) => {
     tenantId,
     name,
     superopsCompanyId: superopsCompanyId || null,
+    cippTenantId: cippTenantId || null,
     automationEnabled: automationEnabled ?? false,
   });
 
@@ -66,6 +68,7 @@ router.post('/', async (req, res) => {
 const updateSchema = z.object({
   name: z.string().min(1).optional(),
   superopsCompanyId: z.string().optional().nullable(),
+  cippTenantId: z.string().optional().nullable(),
   automationEnabled: z.boolean().optional(),
 });
 

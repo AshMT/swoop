@@ -5,6 +5,7 @@ import { eq } from 'drizzle-orm';
 import { requireAuth } from '../../middleware/auth';
 import { encrypt, decrypt } from '../../services/crypto';
 import { SuperOpsClient } from '../../services/psa/superops';
+import { CippClient } from '../../services/cipp';
 import { z } from 'zod';
 
 const router = Router();
@@ -21,6 +22,7 @@ router.get('/', async (_req, res) => {
     superopsRegion: tenants.superopsRegion,
     aiBaseUrl: tenants.aiBaseUrl,
     aiModel: tenants.aiModel,
+    cippBaseUrl: tenants.cippBaseUrl,
     lastPolledAt: tenants.lastPolledAt,
     createdAt: tenants.createdAt,
   }).from(tenants);
@@ -36,6 +38,7 @@ router.get('/:id', async (req, res) => {
     superopsRegion: tenants.superopsRegion,
     aiBaseUrl: tenants.aiBaseUrl,
     aiModel: tenants.aiModel,
+    cippBaseUrl: tenants.cippBaseUrl,
     lastPolledAt: tenants.lastPolledAt,
     createdAt: tenants.createdAt,
   }).from(tenants).where(eq(tenants.id, req.params.id)).limit(1);
@@ -55,6 +58,8 @@ const updateSchema = z.object({
   aiBaseUrl: z.string().url().optional().nullable(),
   aiApiKey: z.string().optional().nullable(),
   aiModel: z.string().optional().nullable(),
+  cippBaseUrl: z.string().url().optional().nullable(),
+  cippApiKey: z.string().optional().nullable(),
 });
 
 router.patch('/:id', async (req, res) => {
@@ -65,7 +70,7 @@ router.patch('/:id', async (req, res) => {
   }
 
   const updates: Record<string, unknown> = {};
-  const { superopsApiKey, aiApiKey, ...rest } = parsed.data;
+  const { superopsApiKey, aiApiKey, cippApiKey, ...rest } = parsed.data;
 
   Object.assign(updates, rest);
 
@@ -74,6 +79,9 @@ router.patch('/:id', async (req, res) => {
   }
   if (aiApiKey !== undefined) {
     updates.aiApiKey = aiApiKey && ENCRYPTION_KEY ? encrypt(aiApiKey, ENCRYPTION_KEY) : aiApiKey;
+  }
+  if (cippApiKey !== undefined) {
+    updates.cippApiKey = cippApiKey && ENCRYPTION_KEY ? encrypt(cippApiKey, ENCRYPTION_KEY) : cippApiKey;
   }
 
   await db.update(tenants).set(updates).where(eq(tenants.id, req.params.id));
@@ -90,6 +98,23 @@ router.post('/:id/test-connection', async (req, res) => {
   const apiKey = ENCRYPTION_KEY ? decrypt(tenant.superopsApiKey, ENCRYPTION_KEY) : tenant.superopsApiKey;
   const client = new SuperOpsClient(tenant.superopsSubdomain, apiKey, tenant.superopsRegion || 'us');
   const result = await client.testConnection();
+  res.json(result);
+});
+
+router.post('/:id/test-cipp', async (req, res) => {
+  const [tenant] = await db.select().from(tenants).where(eq(tenants.id, req.params.id)).limit(1);
+  if (!tenant) {
+    res.status(404).json({ error: 'Tenant not found' });
+    return;
+  }
+  if (!tenant.cippBaseUrl || !tenant.cippApiKey) {
+    res.status(400).json({ ok: false, error: 'CIPP not configured for this tenant' });
+    return;
+  }
+
+  const cippApiKey = ENCRYPTION_KEY ? decrypt(tenant.cippApiKey, ENCRYPTION_KEY) : tenant.cippApiKey;
+  const cipp = new CippClient(tenant.cippBaseUrl, cippApiKey);
+  const result = await cipp.testConnection();
   res.json(result);
 });
 

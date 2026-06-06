@@ -18,6 +18,8 @@ export const tenants = sqliteTable('tenants', {
   aiBaseUrl: text('ai_base_url'),
   aiApiKey: text('ai_api_key'),
   aiModel: text('ai_model'),
+  cippBaseUrl: text('cipp_base_url'),
+  cippApiKey: text('cipp_api_key'), // encrypted at rest
   lastPolledAt: integer('last_polled_at'),
   createdAt: integer('created_at').default(sql`(unixepoch())`),
 });
@@ -27,6 +29,7 @@ export const clients = sqliteTable('clients', {
   tenantId: text('tenant_id').references(() => tenants.id),
   name: text('name').notNull(),
   superopsCompanyId: text('superops_company_id'),
+  cippTenantId: text('cipp_tenant_id'), // e.g. "contoso.onmicrosoft.com"
   automationEnabled: integer('automation_enabled', { mode: 'boolean' }).default(false),
   createdAt: integer('created_at').default(sql`(unixepoch())`),
 });
@@ -47,8 +50,20 @@ export const actionLogs = sqliteTable('action_logs', {
   followUpQuestion: text('follow_up_question'),
   proposedPsaNote: text('proposed_psa_note'),
   rawAiResponse: text('raw_ai_response'),
-  status: text('status').default('pending'),
+  status: text('status').default('awaiting_approval'),
+  approvedBy: text('approved_by'),
+  approvedAt: integer('approved_at'),
+  rejectionReason: text('rejection_reason'),
   createdAt: integer('created_at').default(sql`(unixepoch())`),
+});
+
+export const executionLogs = sqliteTable('execution_logs', {
+  id: text('id').primaryKey(),
+  actionLogId: text('action_log_id').references(() => actionLogs.id),
+  executedAt: integer('executed_at').default(sql`(unixepoch())`),
+  result: text('result'), // 'success' | 'failure'
+  response: text('response'), // raw JSON from CIPP
+  error: text('error'),
 });
 
 export const processedTickets = sqliteTable('processed_tickets', {

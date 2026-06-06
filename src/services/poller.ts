@@ -190,7 +190,12 @@ async function processTicket(
     followUpQuestion: classification.follow_up_question,
     proposedPsaNote: noteText,
     rawAiResponse,
-    status: 'pending',
+    status: (() => {
+      const cls = classification.classification;
+      if (cls === 'ESCALATE') return 'escalated';
+      if (cls === 'FOLLOW_UP') return 'follow_up';
+      return 'awaiting_approval';
+    })(),
   });
 
   console.log(
