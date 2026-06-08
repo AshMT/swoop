@@ -68,7 +68,9 @@ export class CippClient {
       body: body ? JSON.stringify(body) : undefined,
     });
     if (!res.ok) {
-      throw new Error(`CIPP API error: HTTP ${res.status} ${res.statusText}`);
+      let detail = res.statusText;
+      try { detail = await res.text(); } catch { /* ignore */ }
+      throw new Error(`CIPP API error: HTTP ${res.status} — ${detail}`);
     }
     return res.json();
   }
