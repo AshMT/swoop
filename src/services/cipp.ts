@@ -23,7 +23,7 @@ export class CippClient {
     const res = await fetch(url.toString(), {
       method: body ? 'POST' : 'GET',
       headers: {
-        Authorization: `Bearer ${this.apiKey}`,
+        'x-functions-key': this.apiKey,
         'Content-Type': 'application/json',
       },
       body: body ? JSON.stringify(body) : undefined,
