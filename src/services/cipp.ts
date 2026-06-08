@@ -8,14 +8,53 @@ export interface CippActionResult {
 
 export class CippClient {
   private baseUrl: string;
-  private apiKey: string;
+  private clientId: string;
+  private clientSecret: string;
+  private tenantId: string;
 
-  constructor(baseUrl: string, apiKey: string) {
+  private cachedToken: string | null = null;
+  private tokenExpiry = 0;
+
+  constructor(baseUrl: string, clientId: string, clientSecret: string, tenantId: string) {
     this.baseUrl = baseUrl.replace(/\/$/, '');
-    this.apiKey = apiKey;
+    this.clientId = clientId;
+    this.clientSecret = clientSecret;
+    this.tenantId = tenantId;
+  }
+
+  private async getToken(): Promise<string> {
+    if (this.cachedToken && Date.now() < this.tokenExpiry) {
+      return this.cachedToken;
+    }
+
+    const tokenUrl = `https://login.microsoftonline.com/${this.tenantId}/oauth2/v2.0/token`;
+    const scope = `api://${this.clientId}/.default`;
+
+    const res = await fetch(tokenUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'client_credentials',
+        client_id: this.clientId,
+        client_secret: this.clientSecret,
+        scope,
+      }).toString(),
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`CIPP token request failed: HTTP ${res.status} — ${text}`);
+    }
+
+    const data = await res.json() as { access_token: string; expires_in: number };
+    this.cachedToken = data.access_token;
+    // Expire 60s early to avoid using a token right as it expires
+    this.tokenExpiry = Date.now() + (data.expires_in - 60) * 1000;
+    return this.cachedToken;
   }
 
   private async request(path: string, params: Record<string, string> = {}, body?: unknown): Promise<unknown> {
+    const token = await this.getToken();
     const url = new URL(`${this.baseUrl}${path}`);
     for (const [k, v] of Object.entries(params)) {
       url.searchParams.set(k, v);
@@ -23,7 +62,7 @@ export class CippClient {
     const res = await fetch(url.toString(), {
       method: body ? 'POST' : 'GET',
       headers: {
-        'x-functions-key': this.apiKey,
+        Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
       body: body ? JSON.stringify(body) : undefined,
@@ -95,11 +134,7 @@ export class CippClient {
           response = await this.request(
             '/api/EditGroup',
             { TenantFilter: tenantFilter },
-            {
-              action: 'Add',
-              groupName: entities.group_name,
-              userIds: [entities.target_user_email],
-            },
+            { action: 'Add', groupName: entities.group_name, userIds: [entities.target_user_email] },
           );
           break;
         }
@@ -110,11 +145,7 @@ export class CippClient {
           response = await this.request(
             '/api/EditGroup',
             { TenantFilter: tenantFilter },
-            {
-              action: 'Remove',
-              groupName: entities.group_name,
-              userIds: [entities.target_user_email],
-            },
+            { action: 'Remove', groupName: entities.group_name, userIds: [entities.target_user_email] },
           );
           break;
         }
@@ -125,11 +156,7 @@ export class CippClient {
           response = await this.request(
             '/api/EditUser',
             { TenantFilter: tenantFilter },
-            {
-              id: entities.target_user_email,
-              licenses: [{ skuId: entities.license_sku }],
-              licenseAction: 'Add',
-            },
+            { id: entities.target_user_email, licenses: [{ skuId: entities.license_sku }], licenseAction: 'Add' },
           );
           break;
         }
@@ -140,11 +167,7 @@ export class CippClient {
           response = await this.request(
             '/api/EditUser',
             { TenantFilter: tenantFilter },
-            {
-              id: entities.target_user_email,
-              licenses: [{ skuId: entities.license_sku }],
-              licenseAction: 'Remove',
-            },
+            { id: entities.target_user_email, licenses: [{ skuId: entities.license_sku }], licenseAction: 'Remove' },
           );
           break;
         }
@@ -154,9 +177,7 @@ export class CippClient {
           response = await this.request(
             '/api/ExecEditMailboxPermissions',
             { TenantFilter: tenantFilter },
-            {
-              userId: entities.target_user_email,
-            },
+            { userId: entities.target_user_email },
           );
           break;
         }

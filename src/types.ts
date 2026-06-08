@@ -16,7 +16,9 @@ export interface Tenant {
   aiApiKey: string | null; // encrypted at rest
   aiModel: string | null;
   cippBaseUrl: string | null;
-  cippApiKey: string | null; // encrypted at rest
+  cippClientId: string | null;
+  cippClientSecret: string | null; // encrypted at rest
+  cippOauthTenantId: string | null;
   lastPolledAt: number | null;
   createdAt: number | null;
 }

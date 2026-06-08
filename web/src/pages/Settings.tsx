@@ -27,7 +27,9 @@ export default function Settings() {
 
   // CIPP fields
   const [cippBaseUrl, setCippBaseUrl] = useState('');
-  const [cippApiKey, setCippApiKey] = useState('');
+  const [cippClientId, setCippClientId] = useState('');
+  const [cippClientSecret, setCippClientSecret] = useState('');
+  const [cippOauthTenantId, setCippOauthTenantId] = useState('');
   const [cippTest, setCippTest] = useState<TestResult>(null);
   const [cippTesting, setCippTesting] = useState(false);
   const [cippSave, setCippSave] = useState<SaveStatus>('idle');
@@ -43,6 +45,8 @@ export default function Settings() {
           setAiBaseUrl(t.aiBaseUrl || '');
           setAiModel(t.aiModel || '');
           setCippBaseUrl(t.cippBaseUrl || '');
+          setCippClientId(t.cippClientId || '');
+          setCippOauthTenantId(t.cippOauthTenantId || '');
         }
       })
       .finally(() => setLoading(false));
@@ -142,12 +146,19 @@ export default function Settings() {
     try {
       const body: Record<string, string | null> = {
         cippBaseUrl: cippBaseUrl.trim() || null,
-        cippApiKey: cippApiKey.trim() || null,
+        cippClientId: cippClientId.trim() || null,
+        cippOauthTenantId: cippOauthTenantId.trim() || null,
+        cippClientSecret: cippClientSecret.trim() || null,
       };
       await api.patch(`/tenants/${tenant.id}`, body);
       setCippSave('saved');
-      setTenant({ ...tenant, cippBaseUrl: cippBaseUrl.trim() || null });
-      setCippApiKey('');
+      setTenant({
+        ...tenant,
+        cippBaseUrl: cippBaseUrl.trim() || null,
+        cippClientId: cippClientId.trim() || null,
+        cippOauthTenantId: cippOauthTenantId.trim() || null,
+      });
+      setCippClientSecret('');
       setTimeout(() => setCippSave('idle'), 2500);
     } catch {
       setCippSave('error');
@@ -318,24 +329,47 @@ export default function Settings() {
         <p className="text-sm text-gray-500 mb-4">Connect to your CIPP instance to enable automated M365 action execution.</p>
         <div className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">CIPP Base URL</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">CIPP API URL</label>
             <input
               type="url"
               value={cippBaseUrl}
               onChange={(e) => { setCippBaseUrl(e.target.value); setCippTest(null); }}
-              placeholder="https://cipp.yourdomain.com"
+              placeholder="https://cippmbwij.azurewebsites.net"
+              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-swoop-500"
+            />
+            <p className="text-xs text-gray-400 mt-1">The Azure Function App URL shown on the CIPP-API integration page</p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Client ID</label>
+            <input
+              type="text"
+              value={cippClientId}
+              onChange={(e) => { setCippClientId(e.target.value); setCippTest(null); }}
+              placeholder="36b5f3c3-f5a0-4a3c-88b9-4402e069c7da"
+              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-swoop-500"
+            />
+            <p className="text-xs text-gray-400 mt-1">From CIPP → Integrations → CIPP-API → your client row</p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Client Secret <span className="text-gray-400 font-normal">(leave blank to keep existing)</span></label>
+            <input
+              type="password"
+              value={cippClientSecret}
+              onChange={(e) => { setCippClientSecret(e.target.value); setCippTest(null); }}
+              placeholder="Reset Application Secret in CIPP to get this"
               className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-swoop-500"
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">API Key <span className="text-gray-400 font-normal">(leave blank to keep existing)</span></label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">MSP Azure Tenant ID</label>
             <input
-              type="password"
-              value={cippApiKey}
-              onChange={(e) => { setCippApiKey(e.target.value); setCippTest(null); }}
-              placeholder="Enter CIPP API key"
-              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-swoop-500"
+              type="text"
+              value={cippOauthTenantId}
+              onChange={(e) => { setCippOauthTenantId(e.target.value); setCippTest(null); }}
+              placeholder="fe23cefe-51b6-4021-a7e0-38dd7cd0a582"
+              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-swoop-500"
             />
+            <p className="text-xs text-gray-400 mt-1">Your MSP's Azure AD tenant ID — from Entra admin centre → Overview</p>
           </div>
 
           {cippTest && (
@@ -359,7 +393,7 @@ export default function Settings() {
             </button>
             <button
               onClick={handleSaveCipp}
-              disabled={(!cippBaseUrl && !cippApiKey) || cippSave === 'saving'}
+              disabled={(!cippBaseUrl && !cippClientId && !cippClientSecret && !cippOauthTenantId) || cippSave === 'saving'}
               className="px-4 py-2 text-sm bg-swoop-600 text-white rounded-md hover:bg-swoop-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {cippSave === 'saving' ? 'Saving…' : cippSave === 'saved' ? 'Saved!' : cippSave === 'error' ? 'Error — try again' : 'Save'}

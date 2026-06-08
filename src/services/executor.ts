@@ -22,7 +22,9 @@ export async function executeAction(actionLogId: string, approvedBy: string): Pr
 
   const [tenant] = await db.select().from(tenants).where(eq(tenants.id, actionLog.tenantId!)).limit(1);
   if (!tenant) throw new Error('Tenant not found');
-  if (!tenant.cippBaseUrl || !tenant.cippApiKey) throw new Error('CIPP not configured for this tenant');
+  if (!tenant.cippBaseUrl || !tenant.cippClientId || !tenant.cippClientSecret || !tenant.cippOauthTenantId) {
+    throw new Error('CIPP not fully configured for this tenant — set Base URL, Client ID, Client Secret, and Tenant ID in Settings');
+  }
 
   const [client] = await db.select().from(clients).where(eq(clients.id, actionLog.clientId!)).limit(1);
   if (!client) throw new Error('Client not found');
@@ -32,8 +34,8 @@ export async function executeAction(actionLogId: string, approvedBy: string): Pr
   const now = Math.floor(Date.now() / 1000);
   await db.update(actionLogs).set({ status: 'executing', approvedBy, approvedAt: now }).where(eq(actionLogs.id, actionLogId));
 
-  const cippApiKey = ENCRYPTION_KEY ? decrypt(tenant.cippApiKey, ENCRYPTION_KEY) : tenant.cippApiKey;
-  const cipp = new CippClient(tenant.cippBaseUrl, cippApiKey);
+  const clientSecret = ENCRYPTION_KEY ? decrypt(tenant.cippClientSecret, ENCRYPTION_KEY) : tenant.cippClientSecret;
+  const cipp = new CippClient(tenant.cippBaseUrl, tenant.cippClientId, clientSecret, tenant.cippOauthTenantId);
 
   // Reconstruct AiClassification from stored fields
   let entities: AiClassification['entities'] = {

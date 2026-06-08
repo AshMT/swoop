@@ -39,7 +39,9 @@ export function initializeDatabase(): void {
       ai_api_key TEXT,
       ai_model TEXT,
       cipp_base_url TEXT,
-      cipp_api_key TEXT,
+      cipp_client_id TEXT,
+      cipp_client_secret TEXT,
+      cipp_oauth_tenant_id TEXT,
       last_polled_at INTEGER,
       created_at INTEGER DEFAULT (unixepoch())
     );
@@ -100,6 +102,9 @@ export function initializeDatabase(): void {
     `ALTER TABLE tenants ADD COLUMN superops_region TEXT DEFAULT 'us'`,
     `ALTER TABLE tenants ADD COLUMN cipp_base_url TEXT`,
     `ALTER TABLE tenants ADD COLUMN cipp_api_key TEXT`,
+    `ALTER TABLE tenants ADD COLUMN cipp_client_id TEXT`,
+    `ALTER TABLE tenants ADD COLUMN cipp_client_secret TEXT`,
+    `ALTER TABLE tenants ADD COLUMN cipp_oauth_tenant_id TEXT`,
     `ALTER TABLE clients ADD COLUMN cipp_tenant_id TEXT`,
     `ALTER TABLE action_logs ADD COLUMN approved_by TEXT`,
     `ALTER TABLE action_logs ADD COLUMN approved_at INTEGER`,

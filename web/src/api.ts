@@ -56,7 +56,9 @@ export const getTenants = () => api.get<Tenant[]>('/tenants');
 
 export const updateTenant = (id: string, data: {
   cippBaseUrl?: string | null;
-  cippApiKey?: string | null;
+  cippClientId?: string | null;
+  cippClientSecret?: string | null;
+  cippOauthTenantId?: string | null;
   aiBaseUrl?: string | null;
   aiApiKey?: string | null;
   aiModel?: string | null;
@@ -107,6 +109,8 @@ export interface Tenant {
   aiBaseUrl: string | null;
   aiModel: string | null;
   cippBaseUrl: string | null;
+  cippClientId: string | null;
+  cippOauthTenantId: string | null;
   lastPolledAt: number | null;
   createdAt: number | null;
 }

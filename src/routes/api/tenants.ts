@@ -13,36 +13,28 @@ const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || '';
 
 router.use(requireAuth);
 
+const SAFE_FIELDS = {
+  id: tenants.id,
+  name: tenants.name,
+  slug: tenants.slug,
+  superopsSubdomain: tenants.superopsSubdomain,
+  superopsRegion: tenants.superopsRegion,
+  aiBaseUrl: tenants.aiBaseUrl,
+  aiModel: tenants.aiModel,
+  cippBaseUrl: tenants.cippBaseUrl,
+  cippClientId: tenants.cippClientId,
+  cippOauthTenantId: tenants.cippOauthTenantId,
+  lastPolledAt: tenants.lastPolledAt,
+  createdAt: tenants.createdAt,
+} as const;
+
 router.get('/', async (_req, res) => {
-  const rows = await db.select({
-    id: tenants.id,
-    name: tenants.name,
-    slug: tenants.slug,
-    superopsSubdomain: tenants.superopsSubdomain,
-    superopsRegion: tenants.superopsRegion,
-    aiBaseUrl: tenants.aiBaseUrl,
-    aiModel: tenants.aiModel,
-    cippBaseUrl: tenants.cippBaseUrl,
-    lastPolledAt: tenants.lastPolledAt,
-    createdAt: tenants.createdAt,
-  }).from(tenants);
+  const rows = await db.select(SAFE_FIELDS).from(tenants);
   res.json(rows);
 });
 
 router.get('/:id', async (req, res) => {
-  const [tenant] = await db.select({
-    id: tenants.id,
-    name: tenants.name,
-    slug: tenants.slug,
-    superopsSubdomain: tenants.superopsSubdomain,
-    superopsRegion: tenants.superopsRegion,
-    aiBaseUrl: tenants.aiBaseUrl,
-    aiModel: tenants.aiModel,
-    cippBaseUrl: tenants.cippBaseUrl,
-    lastPolledAt: tenants.lastPolledAt,
-    createdAt: tenants.createdAt,
-  }).from(tenants).where(eq(tenants.id, req.params.id)).limit(1);
-
+  const [tenant] = await db.select(SAFE_FIELDS).from(tenants).where(eq(tenants.id, req.params.id)).limit(1);
   if (!tenant) {
     res.status(404).json({ error: 'Tenant not found' });
     return;
@@ -59,7 +51,9 @@ const updateSchema = z.object({
   aiApiKey: z.string().optional().nullable(),
   aiModel: z.string().optional().nullable(),
   cippBaseUrl: z.string().url().optional().nullable(),
-  cippApiKey: z.string().optional().nullable(),
+  cippClientId: z.string().optional().nullable(),
+  cippClientSecret: z.string().optional().nullable(),
+  cippOauthTenantId: z.string().optional().nullable(),
 });
 
 router.patch('/:id', async (req, res) => {
@@ -70,7 +64,7 @@ router.patch('/:id', async (req, res) => {
   }
 
   const updates: Record<string, unknown> = {};
-  const { superopsApiKey, aiApiKey, cippApiKey, ...rest } = parsed.data;
+  const { superopsApiKey, aiApiKey, cippClientSecret, ...rest } = parsed.data;
 
   Object.assign(updates, rest);
 
@@ -80,8 +74,10 @@ router.patch('/:id', async (req, res) => {
   if (aiApiKey !== undefined) {
     updates.aiApiKey = aiApiKey && ENCRYPTION_KEY ? encrypt(aiApiKey, ENCRYPTION_KEY) : aiApiKey;
   }
-  if (cippApiKey !== undefined) {
-    updates.cippApiKey = cippApiKey && ENCRYPTION_KEY ? encrypt(cippApiKey, ENCRYPTION_KEY) : cippApiKey;
+  if (cippClientSecret !== undefined) {
+    updates.cippClientSecret = cippClientSecret && ENCRYPTION_KEY
+      ? encrypt(cippClientSecret, ENCRYPTION_KEY)
+      : cippClientSecret;
   }
 
   await db.update(tenants).set(updates).where(eq(tenants.id, req.params.id));
@@ -107,13 +103,13 @@ router.post('/:id/test-cipp', async (req, res) => {
     res.status(404).json({ error: 'Tenant not found' });
     return;
   }
-  if (!tenant.cippBaseUrl || !tenant.cippApiKey) {
-    res.status(400).json({ ok: false, error: 'CIPP not configured for this tenant' });
+  if (!tenant.cippBaseUrl || !tenant.cippClientId || !tenant.cippClientSecret || !tenant.cippOauthTenantId) {
+    res.status(400).json({ ok: false, error: 'CIPP not fully configured — set Base URL, Client ID, Client Secret, and Tenant ID' });
     return;
   }
 
-  const cippApiKey = ENCRYPTION_KEY ? decrypt(tenant.cippApiKey, ENCRYPTION_KEY) : tenant.cippApiKey;
-  const cipp = new CippClient(tenant.cippBaseUrl, cippApiKey);
+  const clientSecret = ENCRYPTION_KEY ? decrypt(tenant.cippClientSecret, ENCRYPTION_KEY) : tenant.cippClientSecret;
+  const cipp = new CippClient(tenant.cippBaseUrl, tenant.cippClientId, clientSecret, tenant.cippOauthTenantId);
   const result = await cipp.testConnection();
   res.json(result);
 });
