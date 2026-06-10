@@ -40,6 +40,24 @@ function normaliseBaseUrl(url: string): string {
   return stripped.endsWith('/v1') ? stripped : `${stripped}/v1`;
 }
 
+// Pull the JSON object out of a raw model reply. Handles the common ways models
+// wrap their answer: reasoning <think>…</think> blocks (qwen3, deepseek-r1, etc.),
+// markdown code fences, and leading/trailing prose.
+function extractJsonObject(raw: string): string {
+  let s = raw;
+  // Reasoning models emit their chain-of-thought first; the real answer follows the
+  // final </think>. Take everything after it.
+  const thinkClose = s.lastIndexOf('</think>');
+  if (thinkClose !== -1) s = s.slice(thinkClose + '</think>'.length);
+  // Drop any markdown code fences.
+  s = s.replace(/```(?:json)?/gi, '');
+  // Grab the outermost { … } — ignores any surrounding prose.
+  const start = s.indexOf('{');
+  const end = s.lastIndexOf('}');
+  if (start !== -1 && end > start) return s.slice(start, end + 1).trim();
+  return s.trim();
+}
+
 function getAiConfig(tenant: Tenant): { baseUrl: string; apiKey: string; model: string } {
   const raw = tenant.aiBaseUrl || process.env.AI_BASE_URL || 'http://localhost:11434/v1';
   const baseUrl = normaliseBaseUrl(raw);
@@ -82,7 +100,9 @@ export async function classifyTicket(
         model,
         messages,
         temperature: 0.1,
-        max_tokens: 1024,
+        // Generous budget: reasoning models (qwen3, deepseek-r1) spend tokens on a
+        // <think> block before the JSON; too low a cap truncates the answer.
+        max_tokens: 4096,
       }),
     });
 
@@ -94,13 +114,15 @@ export async function classifyTicket(
     const data = (await response.json()) as OpenAIResponse;
     rawResponse = data.choices?.[0]?.message?.content || '';
 
-    // Strip markdown code fences if present
-    const cleaned = rawResponse
-      .replace(/^```(?:json)?\s*/i, '')
-      .replace(/\s*```\s*$/, '')
-      .trim();
+    const cleaned = extractJsonObject(rawResponse);
+    if (!cleaned) throw new Error('AI returned an empty response');
 
-    const parsed = JSON.parse(cleaned) as AiClassification;
+    let parsed: AiClassification;
+    try {
+      parsed = JSON.parse(cleaned) as AiClassification;
+    } catch {
+      throw new Error(`AI response was not valid JSON (got: "${rawResponse.slice(0, 120).replace(/\s+/g, ' ')}…")`);
+    }
 
     // Validate required fields
     if (!parsed.classification || typeof parsed.confidence !== 'number') {
@@ -115,8 +137,17 @@ export async function classifyTicket(
 
     return { classification: parsed, rawResponse };
   } catch (err) {
-    console.error('[AI] Classification error:', err);
-    return { classification: { ...FALLBACK_CLASSIFICATION }, rawResponse };
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error('[AI] Classification error:', msg);
+    if (rawResponse) console.error('[AI] Raw response (first 500 chars):', rawResponse.slice(0, 500));
+    return {
+      classification: {
+        ...FALLBACK_CLASSIFICATION,
+        reasoning: `AI classification failed: ${msg} — manual review required`,
+        escalation_reason: `Classification error: ${msg}`,
+      },
+      rawResponse,
+    };
   }
 }
 
