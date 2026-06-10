@@ -21,6 +21,7 @@ export interface Tenant {
   cippOauthTenantId: string | null;
   cippApiScope: string | null;
   autoConfidenceMin: number | null;
+  escalationContact: string | null;
   lastPolledAt: number | null;
   createdAt: number | null;
 }
@@ -55,6 +56,10 @@ export interface ActionLog {
   approvedBy: string | null;
   approvedAt: number | null;
   rejectionReason: string | null;
+  customerQuestion: string | null;
+  questionPostedAt: number | null;
+  customerReply: string | null;
+  askAttempts: number | null;
   createdAt: number | null;
 }
 
@@ -80,9 +85,19 @@ export interface SuperOpsTicket {
   status: string;
   priority?: string;
   createdTime: string; // ISO datetime string from SuperOps
+  description?: string | null; // ticket body — only present if the API exposes it
   // client and requester may be plain strings or objects depending on query depth
   client?: string | { id?: string; name?: string; clientId?: string; clientName?: string };
   requester?: string | { email?: string; name?: string; emailId?: string };
+}
+
+export interface TicketConversation {
+  conversationId: string;
+  content: string;
+  createdTime: string;
+  // PUBLIC_REPLY/PRIVATE_NOTE-style type, plus who wrote it (shape varies by API version)
+  type?: string | null;
+  user?: string | { name?: string; email?: string } | null;
 }
 
 export interface AiClassification {

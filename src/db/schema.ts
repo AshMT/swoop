@@ -24,6 +24,7 @@ export const tenants = sqliteTable('tenants', {
   cippOauthTenantId: text('cipp_oauth_tenant_id'), // MSP's Azure AD tenant ID for token requests
   cippApiScope: text('cipp_api_scope'), // CIPP-API resource scope, e.g. api://<cipp-api-app-id>/.default
   autoConfidenceMin: real('auto_confidence_min').default(0.9), // min AI confidence for policy auto-execution
+  escalationContact: text('escalation_contact'), // tech name/handle mentioned in escalation notes
   lastPolledAt: integer('last_polled_at'),
   createdAt: integer('created_at').default(sql`(unixepoch())`),
 });
@@ -72,6 +73,11 @@ export const actionLogs = sqliteTable('action_logs', {
   verificationMethod: text('verification_method'), // how the requester's identity was verified
   verifiedBy: text('verified_by'),
   verifiedAt: integer('verified_at'),
+  // Information-gathering loop: question posted publicly to the customer, their reply, attempt count
+  customerQuestion: text('customer_question'),
+  questionPostedAt: integer('question_posted_at'),
+  customerReply: text('customer_reply'),
+  askAttempts: integer('ask_attempts').default(0),
   createdAt: integer('created_at').default(sql`(unixepoch())`),
 });
 

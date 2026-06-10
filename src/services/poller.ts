@@ -9,7 +9,7 @@ import { getPolicy } from './policies';
 import { executeAction } from './executor';
 import { trackStart, trackStage, trackDone } from './pipeline';
 import { warmupAi } from './ai';
-import type { Tenant, Client, SuperOpsTicket } from '../types';
+import type { Tenant, Client, SuperOpsTicket, AiClassification } from '../types';
 
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || '';
 const POLL_INTERVAL_MS = 60_000;
@@ -112,6 +112,12 @@ async function pollTenant(tenant: Tenant): Promise<void> {
     await processTicket(ticket, tenant, enabledClients, superops);
   }
 
+  // Information-gathering loop: check tickets where we asked the customer a
+  // question — if they've replied, re-classify with the new context.
+  await checkWaitingReplies(tenant, superops).catch((err) => {
+    console.error(`[Poller] Reply check failed for tenant "${tenant.name}":`, err);
+  });
+
   // Use poll start time so tickets created DURING a slow AI call are still in the next window
   await db
     .update(tenants)
@@ -157,12 +163,14 @@ async function processTicket(
   let rawAiResponse = '';
   let classification;
 
+  const ticketBody = ticket.description || '';
+
   try {
     trackStage(ticketId, 'classifying');
     const result = await classifyTicket(
       {
         subject: ticket.subject,
-        description: '',
+        description: ticketBody,
         requesterEmail,
       },
       {
@@ -182,6 +190,7 @@ async function processTicket(
   const cls = classification.classification;
   trackStage(ticketId, 'posting_note', { classification: cls, confidence: classification.confidence });
 
+  // Always record the AI's analysis as an internal (private) note — audit trail
   const noteText = formatProposalNote(classification, tenant.name);
   try {
     await superops.addTicketNote(ticketId, noteText, true);
@@ -197,13 +206,44 @@ async function processTicket(
 
   let status: string;
   let reasoning = classification.reasoning;
-  if (cls === 'ESCALATE') {
+  let customerQuestion: string | null = null;
+  let questionPostedAt: number | null = null;
+  let askAttempts = 0;
+
+  if (cls === 'FOLLOW_UP' && classification.follow_up_question) {
+    // Information gathering: ask the customer directly on the ticket (PUBLIC reply)
+    customerQuestion = classification.follow_up_question;
+    const publicAsk = formatCustomerQuestion(customerQuestion, tenant.name);
+    try {
+      await superops.addTicketNote(ticketId, publicAsk, false);
+      questionPostedAt = Math.floor(Date.now() / 1000);
+      askAttempts = 1;
+      status = 'waiting_on_customer';
+      console.log(`[Poller] Ticket ${ticketId}: asked customer — "${customerQuestion}"`);
+    } catch (err) {
+      console.error(`[Poller] Failed to post public question to ticket ${ticketId}:`, err);
+      status = 'follow_up'; // question couldn't be posted — leave for a human
+    }
+  } else if (cls === 'ESCALATE' || cls === 'FOLLOW_UP') {
     status = 'escalated';
-  } else if (cls === 'FOLLOW_UP') {
-    status = 'follow_up';
+    // Escalation: post an internal note formatted FOR THE TECH, tagging the
+    // escalation contact if one is configured.
+    const escNote = formatEscalationNote(classification, tenant, ticket.subject, requesterEmail);
+    try {
+      await superops.addTicketNote(ticketId, escNote, true);
+    } catch (err) {
+      console.error(`[Poller] Failed to post escalation note to ticket ${ticketId}:`, err);
+    }
   } else if (policy?.permission === 'disabled') {
     status = 'escalated';
     reasoning = `${reasoning} [Action type "${cls}" is disabled by policy — escalated to a human]`;
+    const escNote = formatEscalationNote(
+      { ...classification, escalation_reason: `Action type "${cls}" is disabled by policy` },
+      tenant, ticket.subject, requesterEmail,
+    );
+    try {
+      await superops.addTicketNote(ticketId, escNote, true);
+    } catch { /* best-effort */ }
   } else {
     status = 'awaiting_approval';
   }
@@ -215,7 +255,7 @@ async function processTicket(
     clientId: matchedClient.id,
     ticketId,
     ticketSubject: ticket.subject,
-    ticketBody: null,
+    ticketBody: ticketBody || null,
     requesterEmail: requesterEmail || null,
     classification: cls,
     confidence: classification.confidence,
@@ -226,6 +266,9 @@ async function processTicket(
     proposedPsaNote: noteText,
     rawAiResponse,
     status,
+    customerQuestion,
+    questionPostedAt,
+    askAttempts,
   });
 
   console.log(
@@ -250,10 +293,19 @@ async function processTicket(
         await executeAction(actionLogId, 'swoop:auto-policy');
         const [after] = await db.select().from(actionLogs).where(eq(actionLogs.id, actionLogId)).limit(1);
         finalOutcome = after?.status ?? status;
-        const outcome = after?.status === 'executed' ? '✅ executed successfully' : '❌ execution failed — see Swoop dashboard';
-        try {
-          await superops.addTicketNote(ticketId, `🤖 **Swoop AI Agent** — pre-approved action auto-executed per policy: ${outcome}`, true);
-        } catch { /* note is best-effort */ }
+        if (after?.status === 'executed') {
+          // Tell the customer it's done (public), keep the technical record internal
+          try {
+            await superops.addTicketNote(ticketId, formatCompletionNote(classification, tenant.name), false);
+          } catch { /* note is best-effort */ }
+          try {
+            await superops.addTicketNote(ticketId, `🤖 **Swoop AI Agent** — pre-approved action auto-executed per policy: ✅ executed successfully`, true);
+          } catch { /* note is best-effort */ }
+        } else {
+          try {
+            await superops.addTicketNote(ticketId, `🤖 **Swoop AI Agent** — pre-approved action auto-executed per policy: ❌ execution failed — see Swoop dashboard`, true);
+          } catch { /* note is best-effort */ }
+        }
       } catch (err) {
         // Pre-execution failure (e.g. CIPP not configured) — action stays awaiting_approval for a human
         console.error(`[Poller] Auto-execution failed for ticket ${ticketId}, left in approval queue:`, err);
@@ -269,6 +321,247 @@ async function markProcessed(ticketId: string, tenantId: string): Promise<void> 
     .insert(processedTickets)
     .values({ ticketId, tenantId })
     .onConflictDoNothing();
+}
+
+// ─── Information-gathering loop ──────────────────────────────────────────────
+// For every action waiting on the customer, check the ticket conversation for a
+// new reply. When one arrives, re-classify with the full Q&A context and move
+// the action forward (approval queue, another question, or tech escalation).
+
+const MAX_ASK_ATTEMPTS = 2;
+
+function stripHtml(s: string): string {
+  return s.replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+async function checkWaitingReplies(tenant: Tenant, superops: SuperOpsClient): Promise<void> {
+  const waiting = await db
+    .select()
+    .from(actionLogs)
+    .where(and(eq(actionLogs.tenantId, tenant.id), eq(actionLogs.status, 'waiting_on_customer')));
+
+  if (waiting.length === 0) return;
+  console.log(`[Poller] ${waiting.length} ticket(s) waiting on customer — checking for replies`);
+
+  for (const log of waiting) {
+    const conversations = await superops.getTicketConversations(log.ticketId);
+    if (conversations.length === 0) continue; // none yet, or query unsupported
+
+    const askedAt = (log.questionPostedAt ?? 0) * 1000;
+    const newReplies = conversations.filter((c) => {
+      const ts = c.createdTime ? new Date(c.createdTime).getTime() : 0;
+      if (ts <= askedAt) return false;
+      const content = stripHtml(c.content || '');
+      if (!content) return false;
+      // Skip our own notes — they all carry the Swoop signature
+      if (/swoop/i.test(content) && /ai agent|support team/i.test(content)) return false;
+      return true;
+    });
+
+    if (newReplies.length === 0) continue;
+
+    const replyText = newReplies.map((c) => stripHtml(c.content || '')).join('\n');
+    console.log(`[Poller] Ticket ${log.ticketId}: customer replied — re-classifying`);
+
+    await processCustomerReply(log.id, replyText, tenant, superops);
+  }
+}
+
+/**
+ * Re-run classification with the customer's answer folded into the context,
+ * then route the action: approval queue, ask again (max 2), or escalate.
+ * Exported so the API retry endpoint can feed in a manually-entered answer.
+ */
+export async function processCustomerReply(
+  actionLogId: string,
+  replyText: string,
+  tenant: Tenant,
+  superops: SuperOpsClient | null,
+): Promise<void> {
+  const [log] = await db.select().from(actionLogs).where(eq(actionLogs.id, actionLogId)).limit(1);
+  if (!log) return;
+
+  const [client] = log.clientId
+    ? await db.select().from(clients).where(eq(clients.id, log.clientId)).limit(1)
+    : [undefined];
+
+  // Surface the re-classification in the live pipeline view
+  trackStart({
+    ticketId: log.ticketId,
+    tenantId: tenant.id,
+    subject: log.ticketSubject || '(no subject)',
+    clientName: client?.name || '',
+  });
+  trackStage(log.ticketId, 'classifying');
+
+  const contextBody = [
+    log.ticketBody || '',
+    '',
+    `--- ADDITIONAL INFORMATION GATHERED ---`,
+    log.customerQuestion ? `WE ASKED THE CUSTOMER: ${log.customerQuestion}` : '',
+    `CUSTOMER REPLIED: ${replyText}`,
+  ].filter(Boolean).join('\n');
+
+  const { classification, rawResponse } = await classifyTicket(
+    {
+      subject: log.ticketSubject || '',
+      description: contextBody,
+      requesterEmail: log.requesterEmail || '',
+    },
+    { mspName: tenant.name, clientName: client?.name || '' },
+    tenant,
+  );
+
+  const cls = classification.classification;
+  const isActionable = cls !== 'ESCALATE' && cls !== 'FOLLOW_UP';
+  const policy = isActionable ? await getPolicy(tenant.id, cls) : null;
+  const attempts = log.askAttempts ?? 0;
+
+  let status: string;
+  let reasoning = classification.reasoning;
+  let customerQuestion = log.customerQuestion;
+  let questionPostedAt = log.questionPostedAt;
+  let askAttempts = attempts;
+
+  trackStage(log.ticketId, 'deciding', { classification: cls, confidence: classification.confidence });
+
+  if (isActionable && policy?.permission !== 'disabled') {
+    status = 'awaiting_approval';
+  } else if (cls === 'FOLLOW_UP' && classification.follow_up_question && attempts < MAX_ASK_ATTEMPTS && superops) {
+    // Still missing something — ask once more, then stop bothering the customer
+    customerQuestion = classification.follow_up_question;
+    try {
+      await superops.addTicketNote(log.ticketId, formatCustomerQuestion(customerQuestion, tenant.name), false);
+      questionPostedAt = Math.floor(Date.now() / 1000);
+      askAttempts = attempts + 1;
+      status = 'waiting_on_customer';
+      console.log(`[Poller] Ticket ${log.ticketId}: asked customer again (attempt ${askAttempts})`);
+    } catch {
+      status = 'escalated';
+    }
+  } else {
+    status = 'escalated';
+    reasoning = isActionable
+      ? `${reasoning} [Action type "${cls}" is disabled by policy — escalated to a human]`
+      : `${reasoning} [Could not resolve after ${attempts} customer question(s) — escalated to a human]`;
+    if (superops) {
+      try {
+        await superops.addTicketNote(
+          log.ticketId,
+          formatEscalationNote(classification, tenant, log.ticketSubject || '', log.requesterEmail || ''),
+          true,
+        );
+      } catch { /* best-effort */ }
+    }
+  }
+
+  // Post the updated analysis as an internal note
+  if (superops) {
+    try {
+      await superops.addTicketNote(log.ticketId, formatProposalNote(classification, tenant.name), true);
+    } catch { /* best-effort */ }
+  }
+
+  await db.update(actionLogs).set({
+    classification: cls,
+    confidence: classification.confidence,
+    sensitivity: classification.sensitivity,
+    entities: JSON.stringify(classification.entities),
+    reasoning,
+    followUpQuestion: classification.follow_up_question,
+    proposedPsaNote: formatProposalNote(classification, tenant.name),
+    rawAiResponse: rawResponse,
+    status,
+    customerReply: replyText,
+    customerQuestion,
+    questionPostedAt,
+    askAttempts,
+    approvedBy: null,
+    approvedAt: null,
+    rejectionReason: null,
+  }).where(eq(actionLogs.id, actionLogId));
+
+  trackDone(log.ticketId, status);
+  console.log(`[Poller] Ticket ${log.ticketId} re-classified → ${cls} (status: ${status})`);
+}
+
+// ─── Note formatters ─────────────────────────────────────────────────────────
+
+/** Friendly PUBLIC reply asking the customer for missing information. */
+export function formatCustomerQuestion(question: string, mspName: string): string {
+  return [
+    `Hi, thanks for reaching out! 👋`,
+    ``,
+    `To get this sorted for you, we just need one more piece of information:`,
+    ``,
+    `**${question}**`,
+    ``,
+    `Reply to this ticket and we'll take care of the rest.`,
+    ``,
+    `— ${mspName} Support (Swoop AI assistant)`,
+  ].join('\n');
+}
+
+/** PUBLIC confirmation posted after an action completes successfully. */
+export function formatCompletionNote(classification: AiClassification, mspName: string): string {
+  const e = classification.entities;
+  const friendly: Record<string, string> = {
+    password_reset: `The password for ${e.target_user_email || 'the requested account'} has been reset. A password reset notification is on its way.`,
+    account_disable: `The account ${e.target_user_email || 'requested'} has been disabled.`,
+    account_enable: `The account ${e.target_user_email || 'requested'} has been re-enabled.`,
+    mfa_reset: `MFA has been reset for ${e.target_user_email || 'the requested account'} — they'll be prompted to set it up again at next sign-in.`,
+    group_add: `${e.target_user_email || 'The user'} has been added to the "${e.group_name || 'requested'}" group.`,
+    group_remove: `${e.target_user_email || 'The user'} has been removed from the "${e.group_name || 'requested'}" group.`,
+    license_assign: `The ${e.license_sku || 'requested'} license has been assigned to ${e.target_user_email || 'the user'}.`,
+    license_remove: `The ${e.license_sku || 'requested'} license has been removed from ${e.target_user_email || 'the user'}.`,
+    mailbox_permission: `Mailbox permissions have been updated for ${e.target_user_email || 'the requested mailbox'}.`,
+  };
+  const detail = friendly[classification.classification] || 'The requested change has been completed.';
+  return [
+    `Hi, good news — this has been completed! ✅`,
+    ``,
+    detail,
+    ``,
+    `If anything doesn't look right, just reply to this ticket.`,
+    ``,
+    `— ${mspName} Support (Swoop AI assistant)`,
+  ].join('\n');
+}
+
+/** INTERNAL escalation note written for the tech who will pick the ticket up. */
+export function formatEscalationNote(
+  classification: AiClassification,
+  tenant: Tenant,
+  subject: string,
+  requesterEmail: string,
+): string {
+  const lines: string[] = [
+    `🔴 **SWOOP ESCALATION — needs tech review**`,
+    ``,
+  ];
+  if (tenant.escalationContact) {
+    lines.push(`@${tenant.escalationContact} — please pick this up.`, ``);
+  }
+  lines.push(
+    `**Ticket:** ${subject || '(no subject)'}`,
+    `**Requester:** ${requesterEmail || 'unknown'}`,
+    `**Why escalated:** ${classification.escalation_reason || 'AI could not confidently action this request'}`,
+    ``,
+    `**AI analysis:** ${classification.reasoning}`,
+  );
+  const e = classification.entities;
+  const known: string[] = [];
+  if (e.target_user_email) known.push(`• User: ${e.target_user_email}`);
+  if (e.group_name) known.push(`• Group: ${e.group_name}`);
+  if (e.license_sku) known.push(`• License: ${e.license_sku}`);
+  if (known.length > 0) {
+    lines.push(``, `**What we know so far:**`, ...known);
+  }
+  lines.push(
+    ``,
+    `**Action required:** Human judgement needed — review and respond to the customer directly.`,
+  );
+  return lines.join('\n');
 }
 
 export function formatProposalNote(classification: import('../types').AiClassification, mspName: string): string {

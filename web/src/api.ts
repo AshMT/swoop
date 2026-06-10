@@ -63,6 +63,7 @@ export const updateTenant = (id: string, data: {
   aiBaseUrl?: string | null;
   aiApiKey?: string | null;
   aiModel?: string | null;
+  escalationContact?: string | null;
 }) => api.patch(`/tenants/${id}`, data);
 
 export const testCipp = (tenantId: string) =>
@@ -107,8 +108,8 @@ export const approveAction = (id: string, verificationMethod?: string) =>
 export const rejectAction = (id: string, reason?: string) =>
   api.post<ActionLog>(`/actions/${id}/reject`, { reason });
 
-export const retryAction = (id: string, entities?: Record<string, string>) =>
-  api.post<ActionLog>(`/actions/${id}/retry`, entities ? { entities } : {});
+export const retryAction = (id: string, opts?: { entities?: Record<string, string>; answer?: string }) =>
+  api.post<ActionLog>(`/actions/${id}/retry`, opts ?? {});
 
 export const getExecutionLog = (actionId: string) =>
   api.get<ExecutionLog>(`/actions/${actionId}/execution`);
@@ -139,6 +140,7 @@ export interface Tenant {
   cippOauthTenantId: string | null;
   cippApiScope: string | null;
   autoConfidenceMin: number | null;
+  escalationContact: string | null;
   lastPolledAt: number | null;
   createdAt: number | null;
 }
@@ -220,6 +222,10 @@ export interface ActionLog {
   verificationMethod: string | null;
   verifiedBy: string | null;
   verifiedAt: number | null;
+  customerQuestion: string | null;
+  questionPostedAt: number | null;
+  customerReply: string | null;
+  askAttempts: number | null;
   createdAt: number | null;
 }
 

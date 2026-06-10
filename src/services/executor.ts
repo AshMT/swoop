@@ -3,8 +3,10 @@ import { actionLogs, executionLogs, tenants, clients } from '../db/schema';
 import { eq } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
 import { CippClient } from './cipp';
+import { SuperOpsClient } from './psa/superops';
 import { decrypt } from './crypto';
 import { addExecStep } from './pipeline';
+import { formatCustomerQuestion } from './poller';
 import type { AiClassification } from '../types';
 
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || '';
@@ -93,10 +95,61 @@ export async function executeAction(
     error: result.error ?? null,
   });
 
+  // Missing-entity failure (e.g. "license_sku required for license_remove"):
+  // instead of dead-ending as 'failed', ask the customer for the missing detail
+  // on the ticket and park the action as waiting_on_customer.
+  if (!result.ok && result.error) {
+    const missing = parseMissingEntity(result.error);
+    if (missing) {
+      const question = MISSING_ENTITY_QUESTIONS[missing] || `Could you provide the ${missing.replace(/_/g, ' ')}?`;
+      step(`Missing information: ${missing} — asking the customer on the ticket`);
+      const asked = await askCustomerOnTicket(tenant, actionLog.ticketId, question);
+      if (asked) {
+        step(`Question posted to ticket #${actionLog.ticketId} — waiting on customer reply`);
+        await db.update(actionLogs).set({
+          status: 'waiting_on_customer',
+          customerQuestion: question,
+          questionPostedAt: Math.floor(Date.now() / 1000),
+          askAttempts: (actionLog.askAttempts ?? 0) + 1,
+        }).where(eq(actionLogs.id, actionLogId));
+        return;
+      }
+      step('Could not post the question to the ticket — marking failed for manual handling');
+    }
+  }
+
   step(result.ok ? 'Execution log saved — action complete' : 'Execution log saved — action failed');
 
   await db
     .update(actionLogs)
     .set({ status: result.ok ? 'executed' : 'failed' })
     .where(eq(actionLogs.id, actionLogId));
+}
+
+// CIPP execute() throws "X required for Y" when an entity wasn't extracted.
+function parseMissingEntity(error: string): string | null {
+  const m = error.match(/^(\w+) required for /);
+  return m ? m[1] : null;
+}
+
+const MISSING_ENTITY_QUESTIONS: Record<string, string> = {
+  target_user_email: 'What is the email address of the user this request is for?',
+  group_name: 'What is the name of the group this request is for?',
+  license_sku: 'Which license should this apply to? (e.g. Microsoft 365 Business Premium, Office 365 E3)',
+};
+
+async function askCustomerOnTicket(
+  tenant: { superopsSubdomain: string; superopsApiKey: string; superopsRegion: string | null; name: string },
+  ticketId: string,
+  question: string,
+): Promise<boolean> {
+  try {
+    const apiKey = ENCRYPTION_KEY ? decrypt(tenant.superopsApiKey, ENCRYPTION_KEY) : tenant.superopsApiKey;
+    const superops = new SuperOpsClient(tenant.superopsSubdomain, apiKey, tenant.superopsRegion || 'us');
+    await superops.addTicketNote(ticketId, formatCustomerQuestion(question, tenant.name), false);
+    return true;
+  } catch (err) {
+    console.error(`[Executor] Failed to ask customer on ticket ${ticketId}:`, err);
+    return false;
+  }
 }

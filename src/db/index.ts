@@ -125,6 +125,11 @@ export function initializeDatabase(): void {
     `ALTER TABLE action_logs ADD COLUMN approved_by TEXT`,
     `ALTER TABLE action_logs ADD COLUMN approved_at INTEGER`,
     `ALTER TABLE action_logs ADD COLUMN rejection_reason TEXT`,
+    `ALTER TABLE action_logs ADD COLUMN customer_question TEXT`,
+    `ALTER TABLE action_logs ADD COLUMN question_posted_at INTEGER`,
+    `ALTER TABLE action_logs ADD COLUMN customer_reply TEXT`,
+    `ALTER TABLE action_logs ADD COLUMN ask_attempts INTEGER DEFAULT 0`,
+    `ALTER TABLE tenants ADD COLUMN escalation_contact TEXT`,
     `CREATE TABLE IF NOT EXISTS execution_logs (
       id TEXT PRIMARY KEY,
       action_log_id TEXT REFERENCES action_logs(id),

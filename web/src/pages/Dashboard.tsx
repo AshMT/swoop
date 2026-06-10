@@ -50,6 +50,7 @@ const STATUS_COLORS: Record<string, string> = {
   rejected: 'bg-gray-100 text-gray-500',
   escalated: 'bg-red-100 text-red-800',
   follow_up: 'bg-amber-100 text-amber-800',
+  waiting_on_customer: 'bg-sky-100 text-sky-700',
 };
 
 function ClassificationBadge({ cls }: { cls: string | null }) {
@@ -309,15 +310,16 @@ function ActionRow({ log, client, policy }: { log: ActionLog; client?: Client; p
     onSuccess: () => { invalidate(); setShowRejectForm(false); setRejectReason(''); },
   });
 
-  const [missingEntityValue, setMissingEntityValue] = useState('');
+  const [answerText, setAnswerText] = useState('');
 
   const retryMutation = useMutation({
-    mutationFn: (entityPatch?: Record<string, string>) => retryAction(log.id, entityPatch),
-    onSuccess: () => { invalidate(); setMissingEntityValue(''); },
+    mutationFn: (opts?: { entities?: Record<string, string>; answer?: string }) => retryAction(log.id, opts),
+    onSuccess: () => { invalidate(); setAnswerText(''); },
   });
 
   const isActionable = log.status === 'awaiting_approval';
   const isRetryable = log.status === 'failed' || log.status === 'escalated' || log.status === 'follow_up';
+  const isWaitingOnCustomer = log.status === 'waiting_on_customer';
 
   return (
     <>
@@ -429,12 +431,64 @@ function ActionRow({ log, client, policy }: { log: ActionLog; client?: Client; p
                 </div>
               )}
 
+              {/* Information-gathering trail: question asked + customer reply */}
+              {log.customerQuestion && (
+                <div className="md:col-span-2 text-xs bg-sky-50 border border-sky-200 rounded-lg px-3 py-2 space-y-1.5">
+                  <div className="text-sky-900">
+                    💬 <strong>Asked the customer:</strong> {log.customerQuestion}
+                    {log.questionPostedAt && (
+                      <span className="text-sky-600"> — {new Date(log.questionPostedAt * 1000).toLocaleString()}</span>
+                    )}
+                    {(log.askAttempts ?? 0) > 1 && (
+                      <span className="text-sky-600"> (attempt {log.askAttempts})</span>
+                    )}
+                  </div>
+                  {log.customerReply && (
+                    <div className="text-gray-700 border-t border-sky-200 pt-1.5">
+                      ↩️ <strong>Customer replied:</strong> {log.customerReply}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Waiting on customer: tech can enter the answer manually (e.g. gathered by phone) */}
+              {isWaitingOnCustomer && (
+                <div className="md:col-span-2" onClick={(e) => e.stopPropagation()}>
+                  <div className="bg-white border border-gray-200 rounded-lg p-4 max-w-xl">
+                    <div className="text-sm font-medium text-gray-800 mb-1">Already have the answer?</div>
+                    <p className="text-xs text-gray-500 mb-3">
+                      Swoop checks the ticket for the customer's reply automatically. If you got the answer
+                      another way (phone, Teams), enter it here and Swoop will re-classify immediately.
+                    </p>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={answerText}
+                        onChange={(e) => setAnswerText(e.target.value)}
+                        placeholder="e.g. Microsoft 365 Business Premium"
+                        className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-swoop-500"
+                      />
+                      <button
+                        onClick={() => retryMutation.mutate({ answer: answerText })}
+                        disabled={!answerText.trim() || retryMutation.isPending}
+                        className="px-4 py-2 bg-swoop-600 hover:bg-swoop-700 text-white text-sm rounded-lg disabled:opacity-50 font-medium whitespace-nowrap"
+                      >
+                        {retryMutation.isPending ? 'Re-classifying…' : 'Submit answer'}
+                      </button>
+                    </div>
+                    {retryMutation.isError && (
+                      <p className="text-red-600 text-xs mt-2">{apiError(retryMutation.error)}</p>
+                    )}
+                  </div>
+                </div>
+              )}
+
               {/* Retry */}
               {isRetryable && (
                 <div className="md:col-span-2" onClick={(e) => e.stopPropagation()}>
                   <div className="flex items-center gap-3">
                     <button
-                      onClick={() => retryMutation.mutate()}
+                      onClick={() => retryMutation.mutate(undefined)}
                       disabled={retryMutation.isPending}
                       className="inline-flex items-center gap-1.5 px-4 py-2 bg-white border border-gray-300 text-gray-700 text-sm rounded-lg hover:bg-gray-50 disabled:opacity-50 font-medium transition-colors"
                     >
@@ -575,6 +629,7 @@ function ActionRow({ log, client, policy }: { log: ActionLog; client?: Client; p
 const STATUS_OPTIONS = [
   { value: '', label: 'All statuses' },
   { value: 'awaiting_approval', label: 'Awaiting approval' },
+  { value: 'waiting_on_customer', label: 'Waiting on customer' },
   { value: 'executed', label: 'Executed' },
   { value: 'rejected', label: 'Rejected' },
   { value: 'failed', label: 'Failed' },

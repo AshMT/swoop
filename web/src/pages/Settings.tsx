@@ -83,6 +83,10 @@ export default function Settings() {
   const [cippTesting, setCippTesting] = useState(false);
   const [cippSave, setCippSave] = useState<SaveStatus>('idle');
 
+  // Escalation
+  const [escalationContact, setEscalationContact] = useState('');
+  const [escalationSave, setEscalationSave] = useState<SaveStatus>('idle');
+
   useEffect(() => {
     getTenants()
       .then((res) => {
@@ -97,6 +101,7 @@ export default function Settings() {
           setCippClientId(t.cippClientId || '');
           setCippOauthTenantId(t.cippOauthTenantId || '');
           setCippApiScope(t.cippApiScope || '');
+          setEscalationContact(t.escalationContact || '');
         }
       })
       .finally(() => setLoading(false));
@@ -193,6 +198,20 @@ export default function Settings() {
     } catch {
       setAiSave('error');
       setTimeout(() => setAiSave('idle'), 3000);
+    }
+  };
+
+  const handleSaveEscalation = async () => {
+    if (!tenant) return;
+    setEscalationSave('saving');
+    try {
+      await api.patch(`/tenants/${tenant.id}`, { escalationContact: escalationContact.trim() || null });
+      setEscalationSave('saved');
+      setTenant({ ...tenant, escalationContact: escalationContact.trim() || null });
+      setTimeout(() => setEscalationSave('idle'), 2500);
+    } catch {
+      setEscalationSave('error');
+      setTimeout(() => setEscalationSave('idle'), 3000);
     }
   };
 
@@ -573,6 +592,37 @@ export default function Settings() {
               className="px-4 py-2 text-sm bg-swoop-600 text-white rounded-md hover:bg-swoop-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {cippSave === 'saving' ? 'Saving…' : cippSave === 'saved' ? 'Saved ✓' : cippSave === 'error' ? 'Error — try again' : 'Save'}
+            </button>
+          </div>
+        </div>
+      </section>
+
+      {/* Escalation section */}
+      <section className="sticker p-6 mb-8">
+        <h2 className="text-base font-semibold text-gray-800 mb-1">Escalation</h2>
+        <p className="text-xs text-gray-500 mb-4">
+          When Swoop can't handle a ticket it posts an internal escalation note on the ticket.
+          Set a contact below and the note will start with an @mention so the right tech gets pinged.
+        </p>
+        <div className="max-w-md">
+          <label className="block text-sm font-medium text-gray-700 mb-1">Escalation contact</label>
+          <input
+            type="text"
+            value={escalationContact}
+            onChange={(e) => setEscalationContact(e.target.value)}
+            placeholder="e.g. Jordan Smith"
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-swoop-500"
+          />
+          <p className="text-xs text-gray-400 mt-1">
+            Name or handle as it appears in SuperOps — used as "@name" in escalation notes. Leave blank to skip the mention.
+          </p>
+          <div className="mt-3">
+            <button
+              onClick={handleSaveEscalation}
+              disabled={escalationSave === 'saving'}
+              className="px-4 py-2 bg-swoop-600 hover:bg-swoop-700 disabled:opacity-60 text-white text-sm font-medium rounded-lg"
+            >
+              {escalationSave === 'saving' ? 'Saving…' : escalationSave === 'saved' ? 'Saved ✓' : escalationSave === 'error' ? 'Error — try again' : 'Save'}
             </button>
           </div>
         </div>

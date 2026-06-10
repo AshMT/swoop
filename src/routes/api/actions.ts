@@ -7,7 +7,9 @@ import { executeAction } from '../../services/executor';
 import { getPolicy } from '../../services/policies';
 import { getActivePipeline, getExecFeed } from '../../services/pipeline';
 import { classifyTicket } from '../../services/ai';
-import { formatProposalNote } from '../../services/poller';
+import { formatProposalNote, processCustomerReply } from '../../services/poller';
+import { SuperOpsClient } from '../../services/psa/superops';
+import { decrypt } from '../../services/crypto';
 
 const router = Router();
 
@@ -56,6 +58,10 @@ router.get('/', async (req, res) => {
       verificationMethod: actionLogs.verificationMethod,
       verifiedBy: actionLogs.verifiedBy,
       verifiedAt: actionLogs.verifiedAt,
+      customerQuestion: actionLogs.customerQuestion,
+      questionPostedAt: actionLogs.questionPostedAt,
+      customerReply: actionLogs.customerReply,
+      askAttempts: actionLogs.askAttempts,
       createdAt: actionLogs.createdAt,
     })
     .from(actionLogs)
@@ -117,6 +123,8 @@ router.get('/:id', async (req, res) => {
 //   failed      → reset to awaiting_approval so the user can re-approve and re-execute
 //   escalated / follow_up → re-run AI classification against stored ticket data;
 //                           if successful, moves to awaiting_approval
+//   waiting_on_customer (with `answer` in body) → treat the answer as the
+//                           customer's reply and re-classify with that context
 router.post('/:id/retry', async (req: AuthRequest, res) => {
   const { id } = req.params;
 
@@ -126,8 +134,30 @@ router.post('/:id/retry', async (req: AuthRequest, res) => {
     return;
   }
 
-  if (!['failed', 'escalated', 'follow_up'].includes(log.status ?? '')) {
-    res.status(400).json({ error: `Retry is only available for failed, escalated, or follow_up actions (current: ${log.status})` });
+  if (!['failed', 'escalated', 'follow_up', 'waiting_on_customer'].includes(log.status ?? '')) {
+    res.status(400).json({ error: `Retry is only available for failed, escalated, follow_up, or waiting_on_customer actions (current: ${log.status})` });
+    return;
+  }
+
+  // Waiting on customer: a tech can supply the answer directly (e.g. gathered by phone)
+  if (log.status === 'waiting_on_customer') {
+    const { answer } = req.body as { answer?: string };
+    if (!answer?.trim()) {
+      res.status(400).json({ error: 'Provide the customer\'s answer in the "answer" field to move this ticket forward' });
+      return;
+    }
+    const [tenant] = await db.select().from(tenants).where(eq(tenants.id, log.tenantId!)).limit(1);
+    if (!tenant) {
+      res.status(400).json({ error: 'Tenant not found' });
+      return;
+    }
+    const apiKey = process.env.ENCRYPTION_KEY
+      ? decrypt(tenant.superopsApiKey, process.env.ENCRYPTION_KEY)
+      : tenant.superopsApiKey;
+    const superops = new SuperOpsClient(tenant.superopsSubdomain, apiKey, tenant.superopsRegion || 'us');
+    await processCustomerReply(id, answer.trim(), tenant, superops);
+    const [updated] = await db.select().from(actionLogs).where(eq(actionLogs.id, id)).limit(1);
+    res.json(updated);
     return;
   }
 
