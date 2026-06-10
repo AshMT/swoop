@@ -22,6 +22,7 @@ export const tenants = sqliteTable('tenants', {
   cippClientId: text('cipp_client_id'),
   cippClientSecret: text('cipp_client_secret'), // encrypted at rest
   cippOauthTenantId: text('cipp_oauth_tenant_id'), // MSP's Azure AD tenant ID for token requests
+  cippApiScope: text('cipp_api_scope'), // CIPP-API resource scope, e.g. api://<cipp-api-app-id>/.default
   lastPolledAt: integer('last_polled_at'),
   createdAt: integer('created_at').default(sql`(unixepoch())`),
 });

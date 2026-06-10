@@ -6,20 +6,45 @@ export interface CippActionResult {
   error?: string;
 }
 
+/**
+ * Normalize a user-entered CIPP API scope into a valid `.../.default` scope.
+ * Accepts any of:
+ *   - `api://<guid>/.default`  (verbatim — used as-is)
+ *   - `api://<guid>`           (appends `/.default`)
+ *   - `<guid>`                 (wraps as `api://<guid>/.default`)
+ * Returns null for blank/whitespace input so the caller can fall back.
+ */
+export function normalizeScope(raw?: string | null): string | null {
+  const v = (raw || '').trim();
+  if (!v) return null;
+  if (v.endsWith('/.default')) return v;
+  if (v.startsWith('api://')) return `${v.replace(/\/$/, '')}/.default`;
+  return `api://${v}/.default`;
+}
+
 export class CippClient {
   private baseUrl: string;
   private clientId: string;
   private clientSecret: string;
   private tenantId: string;
+  private scope: string;
 
   private cachedToken: string | null = null;
   private tokenExpiry = 0;
 
-  constructor(baseUrl: string, clientId: string, clientSecret: string, tenantId: string) {
+  /**
+   * @param apiScope The CIPP-API resource scope to request a token for, e.g.
+   *   `api://<cipp-api-app-id>/.default` (the value from CIPP's "Copy API Scope").
+   *   This is the AUDIENCE the CIPP Function App validates — it is usually a
+   *   DIFFERENT app than the client you authenticate as. If omitted, falls back
+   *   to `api://<clientId>/.default` for backward compatibility.
+   */
+  constructor(baseUrl: string, clientId: string, clientSecret: string, tenantId: string, apiScope?: string | null) {
     this.baseUrl = baseUrl.replace(/\/$/, '');
     this.clientId = clientId;
     this.clientSecret = clientSecret;
     this.tenantId = tenantId;
+    this.scope = normalizeScope(apiScope) || `api://${clientId}/.default`;
   }
 
   private async getToken(): Promise<string> {
@@ -28,7 +53,7 @@ export class CippClient {
     }
 
     const tokenUrl = `https://login.microsoftonline.com/${this.tenantId}/oauth2/v2.0/token`;
-    const scope = `api://${this.clientId}/.default`;
+    const scope = this.scope;
 
     const res = await fetch(tokenUrl, {
       method: 'POST',

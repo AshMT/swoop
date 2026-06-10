@@ -24,6 +24,7 @@ const SAFE_FIELDS = {
   cippBaseUrl: tenants.cippBaseUrl,
   cippClientId: tenants.cippClientId,
   cippOauthTenantId: tenants.cippOauthTenantId,
+  cippApiScope: tenants.cippApiScope,
   lastPolledAt: tenants.lastPolledAt,
   createdAt: tenants.createdAt,
 } as const;
@@ -54,6 +55,7 @@ const updateSchema = z.object({
   cippClientId: z.string().optional().nullable(),
   cippClientSecret: z.string().optional().nullable(),
   cippOauthTenantId: z.string().optional().nullable(),
+  cippApiScope: z.string().optional().nullable(),
 });
 
 router.patch('/:id', async (req, res) => {
@@ -109,7 +111,7 @@ router.post('/:id/test-cipp', async (req, res) => {
   }
 
   const clientSecret = ENCRYPTION_KEY ? decrypt(tenant.cippClientSecret, ENCRYPTION_KEY) : tenant.cippClientSecret;
-  const cipp = new CippClient(tenant.cippBaseUrl, tenant.cippClientId, clientSecret, tenant.cippOauthTenantId);
+  const cipp = new CippClient(tenant.cippBaseUrl, tenant.cippClientId, clientSecret, tenant.cippOauthTenantId, tenant.cippApiScope);
   const result = await cipp.testConnection();
   res.json(result);
 });

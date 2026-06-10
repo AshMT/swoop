@@ -59,6 +59,7 @@ export const updateTenant = (id: string, data: {
   cippClientId?: string | null;
   cippClientSecret?: string | null;
   cippOauthTenantId?: string | null;
+  cippApiScope?: string | null;
   aiBaseUrl?: string | null;
   aiApiKey?: string | null;
   aiModel?: string | null;
@@ -114,6 +115,7 @@ export interface Tenant {
   cippBaseUrl: string | null;
   cippClientId: string | null;
   cippOauthTenantId: string | null;
+  cippApiScope: string | null;
   lastPolledAt: number | null;
   createdAt: number | null;
 }

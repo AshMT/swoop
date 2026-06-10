@@ -35,7 +35,7 @@ export async function executeAction(actionLogId: string, approvedBy: string): Pr
   await db.update(actionLogs).set({ status: 'executing', approvedBy, approvedAt: now }).where(eq(actionLogs.id, actionLogId));
 
   const clientSecret = ENCRYPTION_KEY ? decrypt(tenant.cippClientSecret, ENCRYPTION_KEY) : tenant.cippClientSecret;
-  const cipp = new CippClient(tenant.cippBaseUrl, tenant.cippClientId, clientSecret, tenant.cippOauthTenantId);
+  const cipp = new CippClient(tenant.cippBaseUrl, tenant.cippClientId, clientSecret, tenant.cippOauthTenantId, tenant.cippApiScope);
 
   // Reconstruct AiClassification from stored fields
   let entities: AiClassification['entities'] = {

@@ -66,6 +66,7 @@ export default function Settings() {
   const [cippClientId, setCippClientId] = useState('');
   const [cippClientSecret, setCippClientSecret] = useState('');
   const [cippOauthTenantId, setCippOauthTenantId] = useState('');
+  const [cippApiScope, setCippApiScope] = useState('');
   const [cippTest, setCippTest] = useState<TestResult>(null);
   const [cippTesting, setCippTesting] = useState(false);
   const [cippSave, setCippSave] = useState<SaveStatus>('idle');
@@ -83,6 +84,7 @@ export default function Settings() {
           setCippBaseUrl(t.cippBaseUrl || '');
           setCippClientId(t.cippClientId || '');
           setCippOauthTenantId(t.cippOauthTenantId || '');
+          setCippApiScope(t.cippApiScope || '');
         }
       })
       .finally(() => setLoading(false));
@@ -192,6 +194,7 @@ export default function Settings() {
         cippBaseUrl: cippBaseUrl.trim() || null,
         cippClientId: cippClientId.trim() || null,
         cippOauthTenantId: cippOauthTenantId.trim() || null,
+        cippApiScope: cippApiScope.trim() || null,
       };
       // Only send the secret if a new value was entered — omitting it keeps the existing stored secret
       if (cippClientSecret.trim()) body.cippClientSecret = cippClientSecret.trim();
@@ -202,6 +205,7 @@ export default function Settings() {
         cippBaseUrl: cippBaseUrl.trim() || null,
         cippClientId: cippClientId.trim() || null,
         cippOauthTenantId: cippOauthTenantId.trim() || null,
+        cippApiScope: cippApiScope.trim() || null,
       });
       setCippClientSecret('');
       setTimeout(() => setCippSave('idle'), 2500);
@@ -436,7 +440,11 @@ export default function Settings() {
                 </li>
                 <li className="flex gap-3">
                   <span className="flex-shrink-0 w-5 h-5 rounded-full bg-ink text-white text-xs flex items-center justify-center font-bold mt-0.5">5</span>
-                  <span>Paste all four values below, click <strong>Save</strong>, then <strong>Test Connection</strong>.</span>
+                  <span>On the swoop client row → <strong>⋯ → Copy API Scope</strong>. Paste that into <strong>API Scope</strong> below — it's the resource the token targets and is usually a <em>different</em> GUID than the Client ID.</span>
+                </li>
+                <li className="flex gap-3">
+                  <span className="flex-shrink-0 w-5 h-5 rounded-full bg-ink text-white text-xs flex items-center justify-center font-bold mt-0.5">6</span>
+                  <span>Paste all values below, click <strong>Save</strong>, then <strong>Test Connection</strong>.</span>
                 </li>
               </ol>
             </div>
@@ -487,6 +495,21 @@ export default function Settings() {
               className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-swoop-500"
             />
             <p className="text-xs text-gray-400 mt-1">Your MSP's Azure AD tenant ID — Entra admin centre → Overview</p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">API Scope</label>
+            <input
+              type="text"
+              value={cippApiScope}
+              onChange={(e) => { setCippApiScope(e.target.value); setCippTest(null); }}
+              placeholder="api://36b5f3c3-f5a0-4a3c-88b9-4402e069c7da/.default"
+              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-swoop-500"
+            />
+            <p className="text-xs text-gray-400 mt-1">
+              From CIPP → the swoop client's <strong>⋯ → Copy API Scope</strong>. This is the <em>resource</em> the token
+              is requested for — usually a <strong>different</strong> GUID than the Client ID. Leave blank to default to
+              <code> api://&lt;Client ID&gt;/.default</code>.
+            </p>
           </div>
 
           {cippTest && (
