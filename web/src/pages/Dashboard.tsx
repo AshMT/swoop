@@ -309,9 +309,11 @@ function ActionRow({ log, client, policy }: { log: ActionLog; client?: Client; p
     onSuccess: () => { invalidate(); setShowRejectForm(false); setRejectReason(''); },
   });
 
+  const [missingEntityValue, setMissingEntityValue] = useState('');
+
   const retryMutation = useMutation({
-    mutationFn: () => retryAction(log.id),
-    onSuccess: () => invalidate(),
+    mutationFn: (entityPatch?: Record<string, string>) => retryAction(log.id, entityPatch),
+    onSuccess: () => { invalidate(); setMissingEntityValue(''); },
   });
 
   const isActionable = log.status === 'awaiting_approval';

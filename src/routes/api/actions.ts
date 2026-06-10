@@ -131,10 +131,17 @@ router.post('/:id/retry', async (req: AuthRequest, res) => {
     return;
   }
 
-  // Failed execution: reset to awaiting_approval so the user re-approves
+  // Failed execution: reset to awaiting_approval so the user re-approves.
+  // Optional `entities` body patch lets the caller fill in missing fields before re-queuing.
   if (log.status === 'failed') {
+    const { entities: entityPatch } = req.body as { entities?: Record<string, string> };
+    let entities = log.entities;
+    if (entityPatch && Object.keys(entityPatch).length > 0) {
+      const existing = log.entities ? (() => { try { return JSON.parse(log.entities); } catch { return {}; } })() : {};
+      entities = JSON.stringify({ ...existing, ...entityPatch });
+    }
     await db.update(actionLogs)
-      .set({ status: 'awaiting_approval', approvedBy: null, approvedAt: null })
+      .set({ status: 'awaiting_approval', approvedBy: null, approvedAt: null, entities })
       .where(eq(actionLogs.id, id));
     const [updated] = await db.select().from(actionLogs).where(eq(actionLogs.id, id)).limit(1);
     res.json(updated);
