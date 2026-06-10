@@ -109,8 +109,9 @@ export default function Settings() {
     try {
       const res = await testSuperOps(subdomain.trim(), superopsKey.trim(), superopsRegion);
       setSuperopsTest(res.data as TestResult);
-    } catch {
-      setSuperopsTest({ ok: false, error: 'Request failed' });
+    } catch (err: any) {
+      const msg = err?.response?.data?.error || err?.message || 'Request failed';
+      setSuperopsTest({ ok: false, error: msg });
     } finally {
       setSuperopsTesting(false);
     }
@@ -140,8 +141,9 @@ export default function Settings() {
     try {
       const res = await testAi(aiBaseUrl.trim(), aiApiKey.trim(), aiModel.trim());
       setAiTest({ ok: res.data.ok });
-    } catch {
-      setAiTest({ ok: false, error: 'Request failed' });
+    } catch (err: any) {
+      const msg = err?.response?.data?.error || err?.message || 'Request failed';
+      setAiTest({ ok: false, error: msg });
     } finally {
       setAiTesting(false);
     }
@@ -154,8 +156,8 @@ export default function Settings() {
       const body: Record<string, string | null> = {
         aiBaseUrl: aiBaseUrl.trim() || null,
         aiModel: aiModel.trim() || null,
-        aiApiKey: aiApiKey.trim() || null,
       };
+      if (aiApiKey.trim()) body.aiApiKey = aiApiKey.trim();
       await api.patch(`/tenants/${tenant.id}`, body);
       setAiSave('saved');
       setTenant({ ...tenant, aiBaseUrl: aiBaseUrl.trim() || null, aiModel: aiModel.trim() || null });
@@ -174,8 +176,9 @@ export default function Settings() {
     try {
       const res = await testCipp(tenant.id);
       setCippTest(res.data);
-    } catch {
-      setCippTest({ ok: false, error: 'Request failed' });
+    } catch (err: any) {
+      const msg = err?.response?.data?.error || err?.response?.data?.message || err?.message || 'Request failed';
+      setCippTest({ ok: false, error: msg });
     } finally {
       setCippTesting(false);
     }
@@ -189,8 +192,9 @@ export default function Settings() {
         cippBaseUrl: cippBaseUrl.trim() || null,
         cippClientId: cippClientId.trim() || null,
         cippOauthTenantId: cippOauthTenantId.trim() || null,
-        cippClientSecret: cippClientSecret.trim() || null,
       };
+      // Only send the secret if a new value was entered — omitting it keeps the existing stored secret
+      if (cippClientSecret.trim()) body.cippClientSecret = cippClientSecret.trim();
       await api.patch(`/tenants/${tenant.id}`, body);
       setCippSave('saved');
       setTenant({
