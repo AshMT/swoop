@@ -1,5 +1,6 @@
 import { useState, FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
+import Magpie from '../components/Magpie';
 import {
   setupAdmin,
   testSuperOps,
@@ -167,10 +168,13 @@ export default function Setup({ onComplete }: Props) {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
+    <div className="min-h-screen flex items-center justify-center px-4">
       <div className="w-full max-w-lg">
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-gray-900">Welcome to Swoop</h1>
+          <div className="inline-block -rotate-6 mb-3">
+            <Magpie size={72} />
+          </div>
+          <h1 className="text-3xl font-bold tracking-tight text-ink">Welcome to Swoop</h1>
           <p className="text-gray-500 mt-1">Let's get you set up in a few minutes</p>
         </div>
 
@@ -197,7 +201,7 @@ export default function Setup({ onComplete }: Props) {
           </div>
         )}
 
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8">
+        <div className="sticker p-8">
           {error && (
             <div className="bg-red-50 text-red-700 border border-red-200 rounded-lg p-3 text-sm mb-4">
               {error}

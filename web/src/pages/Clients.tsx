@@ -77,7 +77,7 @@ export default function Clients() {
 
       {/* Add client form */}
       {showAdd && (
-        <div className="bg-white rounded-xl border border-gray-200 p-5 mb-6">
+        <div className="sticker p-5 mb-6">
           <h3 className="font-semibold text-gray-900 mb-4">Add client</h3>
           {addError && (
             <div className="bg-red-50 text-red-700 border border-red-200 rounded p-3 text-sm mb-3">{addError}</div>
@@ -148,7 +148,7 @@ export default function Clients() {
       )}
 
       {/* Clients table */}
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <div className="sticker overflow-hidden">
         {isLoading ? (
           <div className="text-center py-12 text-gray-400 text-sm">Loading clients...</div>
         ) : clients.length === 0 ? (

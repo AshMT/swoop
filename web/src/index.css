@@ -3,5 +3,18 @@
 @tailwind utilities;
 
 body {
-  @apply antialiased;
+  @apply antialiased bg-paper text-ink;
+  /* Faint dot grid — reads as a sticker backing sheet */
+  background-image: radial-gradient(rgba(14, 14, 14, 0.04) 1px, transparent 1px);
+  background-size: 22px 22px;
+}
+
+@layer components {
+  /* Die-cut sticker card: white face, white cut margin, hairline edge, lift shadow */
+  .sticker {
+    @apply bg-white rounded-2xl shadow-sticker;
+  }
+  .sticker-sm {
+    @apply bg-white rounded-xl shadow-sticker-sm;
+  }
 }

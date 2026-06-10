@@ -282,19 +282,19 @@ export default function Dashboard() {
       {/* Stats */}
       {stats && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
-          <div className="bg-white rounded-xl border border-gray-200 p-4">
+          <div className="sticker p-4">
             <div className="text-2xl font-bold text-gray-900">{stats.total}</div>
             <div className="text-xs text-gray-500 mt-1">Total processed</div>
           </div>
-          <div className="bg-white rounded-xl border border-amber-200 p-4">
+          <div className="sticker p-4">
             <div className="text-2xl font-bold text-amber-600">{pendingApproval}</div>
             <div className="text-xs text-gray-500 mt-1">Awaiting approval</div>
           </div>
-          <div className="bg-white rounded-xl border border-gray-200 p-4">
+          <div className="sticker p-4">
             <div className="text-2xl font-bold text-red-600">{stats.byClassification['ESCALATE'] || 0}</div>
             <div className="text-xs text-gray-500 mt-1">Escalated</div>
           </div>
-          <div className="bg-white rounded-xl border border-gray-200 p-4">
+          <div className="sticker p-4">
             <div className="text-2xl font-bold text-red-700">{stats.highSensitivity}</div>
             <div className="text-xs text-gray-500 mt-1">High sensitivity</div>
           </div>
@@ -326,7 +326,7 @@ export default function Dashboard() {
       </div>
 
       {/* Table */}
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <div className="sticker overflow-hidden">
         {isLoading ? (
           <div className="text-center py-12 text-gray-400 text-sm">Loading action logs...</div>
         ) : actions.length === 0 ? (

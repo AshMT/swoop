@@ -184,7 +184,7 @@ export default function Settings() {
       <p className="text-sm text-gray-500 mb-8">Update your SuperOps connection and AI provider configuration.</p>
 
       {/* SuperOps section */}
-      <section className="mb-10">
+      <section className="sticker p-6 mb-8">
         <h2 className="text-base font-semibold text-gray-800 mb-4">SuperOps Connection</h2>
         <div className="space-y-4">
           <div>
@@ -253,10 +253,9 @@ export default function Settings() {
         </div>
       </section>
 
-      <hr className="border-gray-200 mb-10" />
 
       {/* AI section */}
-      <section className="mb-10">
+      <section className="sticker p-6 mb-8">
         <h2 className="text-base font-semibold text-gray-800 mb-4">AI Provider</h2>
         <div className="space-y-4">
           <div>
@@ -321,10 +320,9 @@ export default function Settings() {
         </div>
       </section>
 
-      <hr className="border-gray-200 mb-10" />
 
       {/* CIPP section */}
-      <section className="mb-10">
+      <section className="sticker p-6 mb-8">
         <h2 className="text-base font-semibold text-gray-800 mb-1">CIPP Integration</h2>
         <p className="text-sm text-gray-500 mb-4">Connect to your CIPP instance to enable automated M365 action execution.</p>
         <div className="space-y-4">
@@ -402,10 +400,9 @@ export default function Settings() {
         </div>
       </section>
 
-      <hr className="border-gray-200 mb-8" />
 
       {/* Tenant info */}
-      <section>
+      <section className="sticker p-6">
         <h2 className="text-base font-semibold text-gray-800 mb-3">Tenant Info</h2>
         <dl className="space-y-2 text-sm">
           <div className="flex gap-4">

@@ -1,6 +1,7 @@
 import { useState, FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { login } from '../api';
+import Magpie from '../components/Magpie';
 
 export default function Login() {
   const [email, setEmail] = useState('');
@@ -25,14 +26,17 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50">
+    <div className="min-h-screen flex items-center justify-center">
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-gray-900">Swoop</h1>
+          <div className="inline-block -rotate-6 mb-3">
+            <Magpie size={72} />
+          </div>
+          <h1 className="text-3xl font-bold tracking-tight text-ink">Swoop</h1>
           <p className="text-gray-500 mt-1">AI Helpdesk Agent</p>
         </div>
 
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8">
+        <div className="sticker p-8">
           <h2 className="text-lg font-semibold text-gray-900 mb-6">Sign in</h2>
 
           {error && (
