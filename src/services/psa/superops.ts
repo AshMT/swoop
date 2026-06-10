@@ -39,7 +39,10 @@ const ADD_NOTE_MUTATION = `
 const INTROSPECT_NOTE_INPUT = `
   query IntrospectNoteInput {
     __type(name: "CreateTicketNoteInput") {
-      inputFields { name }
+      inputFields {
+        name
+        type { name kind ofType { name kind } }
+      }
     }
   }
 `;
@@ -109,8 +112,12 @@ export class SuperOpsClient implements PSAClient {
 
   async logNoteInputFields(): Promise<void> {
     try {
-      const data = await this.client.request<{ __type: { inputFields: { name: string }[] } }>(INTROSPECT_NOTE_INPUT);
-      const fields = data.__type?.inputFields?.map((f) => f.name) || [];
+      type FieldInfo = { name: string; type: { name: string | null; kind: string; ofType: { name: string | null; kind: string } | null } };
+      const data = await this.client.request<{ __type: { inputFields: FieldInfo[] } }>(INTROSPECT_NOTE_INPUT);
+      const fields = (data.__type?.inputFields || []).map((f) => {
+        const t = f.type.ofType ?? f.type;
+        return `${f.name}: ${t.name ?? f.type.kind}`;
+      });
       console.log('[SuperOps] CreateTicketNoteInput fields:', fields.join(', '));
     } catch {
       // non-critical
@@ -120,8 +127,8 @@ export class SuperOpsClient implements PSAClient {
   async addTicketNote(ticketId: string, note: string, isPrivate: boolean): Promise<void> {
     await this.client.request(ADD_NOTE_MUTATION, {
       input: {
-        // SuperOps uses ticketIdentifier (TicketIdentifierInput) not a flat ticketId field
-        ticketIdentifier: { ticketId },
+        // Field is "ticket" per CreateTicketNoteInput introspection (not "ticketIdentifier")
+        ticket: { ticketId },
         content: note,
         privacyType: isPrivate ? 'PRIVATE' : 'PUBLIC',
       },
