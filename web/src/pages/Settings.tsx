@@ -5,7 +5,7 @@ import api from '../api';
 
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 type TestResult = { ok: boolean; error?: string; endpoint?: string } | null;
-type ChipStatus = 'not-configured' | 'configured' | 'connected' | 'error';
+type ChipStatus = 'not-configured' | 'configured' | 'connected' | 'error' | 'checking';
 
 function StatusChip({ status }: { status: ChipStatus }) {
   const ring = {
@@ -13,18 +13,21 @@ function StatusChip({ status }: { status: ChipStatus }) {
     configured: 'bg-amber-50 text-amber-700 ring-1 ring-amber-200',
     connected: 'bg-green-50 text-green-700 ring-1 ring-green-200',
     error: 'bg-red-50 text-red-700 ring-1 ring-red-200',
+    checking: 'bg-blue-50 text-blue-600 ring-1 ring-blue-200',
   }[status];
   const dot = {
     'not-configured': 'bg-gray-400',
     configured: 'bg-amber-400',
     connected: 'bg-green-500',
     error: 'bg-red-500',
+    checking: 'bg-blue-400 animate-pulse',
   }[status];
   const label = {
     'not-configured': 'Not configured',
     configured: 'Saved',
     connected: 'Connected ✓',
     error: 'Error',
+    checking: 'Checking…',
   }[status];
   return (
     <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium ${ring}`}>
@@ -34,15 +37,14 @@ function StatusChip({ status }: { status: ChipStatus }) {
   );
 }
 
-// Combines a fresh manual test, the live polled health check, and the saved-config
-// heuristic (used only until the first live result arrives) into a single chip status.
+// Manual test wins (explicit, just-entered credentials).
+// Live poll can only upgrade to 'connected' — never downgrade to 'error', since
+// background checks can fail transiently (timeout, token refresh, network blip).
 function deriveStatus(hasSaved: boolean, test: TestResult, live?: IntegrationCheck): ChipStatus {
   if (test?.ok === true) return 'connected';
   if (test?.ok === false) return 'error';
-  if (live) {
-    if (!live.configured) return 'not-configured';
-    return live.ok ? 'connected' : 'error';
-  }
+  if (live?.ok === true) return 'connected';
+  if (live?.configured === false) return 'not-configured';
   if (hasSaved) return 'configured';
   return 'not-configured';
 }
@@ -101,12 +103,14 @@ export default function Settings() {
   }, []);
 
   // Live health poll — re-checks every saved integration on an interval so chips stay current.
-  const { data: liveStatus, dataUpdatedAt } = useQuery({
+  const { data: liveStatus, dataUpdatedAt, isLoading: liveLoading } = useQuery({
     queryKey: ['integration-status', tenant?.id],
     queryFn: () => getIntegrationStatus(tenant!.id).then((r) => r.data),
     enabled: !!tenant?.id,
     refetchInterval: 30_000,
   });
+  // True only on the very first fetch before any data has arrived
+  const initialChecking = !!tenant?.id && liveLoading && !liveStatus;
 
   // Derived statuses — a fresh manual test wins, otherwise the live poll drives the chip.
   const superopsStatus = deriveStatus(!!tenant?.superopsSubdomain, superopsTest, liveStatus?.superops);
@@ -262,9 +266,9 @@ export default function Settings() {
         <div className="grid grid-cols-3 gap-3">
           {(
             [
-              { label: 'SuperOps', status: superopsStatus },
-              { label: 'AI Provider', status: aiStatus },
-              { label: 'CIPP', status: cippStatus },
+              { label: 'SuperOps', status: initialChecking && !!tenant?.superopsSubdomain ? 'checking' : superopsStatus },
+              { label: 'AI Provider', status: initialChecking && !!(tenant?.aiBaseUrl && tenant?.aiModel) ? 'checking' : aiStatus },
+              { label: 'CIPP', status: initialChecking && !!(tenant?.cippBaseUrl && tenant?.cippClientId) ? 'checking' : cippStatus },
             ] as { label: string; status: ChipStatus }[]
           ).map(({ label, status }) => (
             <div key={label} className="flex flex-col items-center gap-1.5 py-2 px-3 rounded-lg bg-gray-50 border border-gray-100">
