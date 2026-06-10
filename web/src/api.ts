@@ -85,8 +85,11 @@ export const updateClient = (id: string, data: Partial<Client>) =>
 export const deleteClient = (id: string) => api.delete(`/clients/${id}`);
 
 // ─── Actions ──────────────────────────────────────────────────────────────────
-export const getActions = (params?: { clientId?: string; tenantId?: string; classification?: string; limit?: number }) =>
+export const getActions = (params?: { clientId?: string; tenantId?: string; classification?: string; status?: string; limit?: number }) =>
   api.get<ActionLog[]>('/actions', { params });
+
+export const getPendingCount = (tenantId?: string) =>
+  api.get<{ pending: number }>('/actions/pending-count', { params: tenantId ? { tenantId } : undefined });
 
 export const getActionStats = (tenantId?: string) =>
   api.get<ActionStats>('/actions/stats', { params: tenantId ? { tenantId } : undefined });
@@ -159,5 +162,6 @@ export interface ExecutionLog {
 export interface ActionStats {
   total: number;
   byClassification: Record<string, number>;
+  byStatus: Record<string, number>;
   highSensitivity: number;
 }

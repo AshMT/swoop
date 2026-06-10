@@ -9,14 +9,25 @@ const router = Router();
 
 router.use(requireAuth);
 
+router.get('/pending-count', async (req, res) => {
+  const tenantId = req.query.tenantId as string | undefined;
+  const rows = tenantId
+    ? await db.select({ id: actionLogs.id }).from(actionLogs)
+        .where(and(eq(actionLogs.tenantId, tenantId), eq(actionLogs.status, 'awaiting_approval')))
+    : await db.select({ id: actionLogs.id }).from(actionLogs)
+        .where(eq(actionLogs.status, 'awaiting_approval'));
+  res.json({ pending: rows.length });
+});
+
 router.get('/', async (req, res) => {
-  const { clientId, tenantId, classification, limit: limitStr } = req.query as Record<string, string>;
+  const { clientId, tenantId, classification, status, limit: limitStr } = req.query as Record<string, string>;
   const limit = Math.min(parseInt(limitStr || '50', 10) || 50, 200);
 
   const conditions = [];
   if (clientId) conditions.push(eq(actionLogs.clientId, clientId));
   if (tenantId) conditions.push(eq(actionLogs.tenantId, tenantId));
   if (classification) conditions.push(eq(actionLogs.classification, classification));
+  if (status) conditions.push(eq(actionLogs.status, status));
 
   const rows = await db
     .select({
@@ -52,23 +63,26 @@ router.get('/stats', async (req, res) => {
   const tenantId = req.query.tenantId as string | undefined;
 
   const allLogs = tenantId
-    ? await db.select({ classification: actionLogs.classification, sensitivity: actionLogs.sensitivity })
+    ? await db.select({ classification: actionLogs.classification, sensitivity: actionLogs.sensitivity, status: actionLogs.status })
         .from(actionLogs)
         .where(eq(actionLogs.tenantId, tenantId))
-    : await db.select({ classification: actionLogs.classification, sensitivity: actionLogs.sensitivity })
+    : await db.select({ classification: actionLogs.classification, sensitivity: actionLogs.sensitivity, status: actionLogs.status })
         .from(actionLogs);
 
   const total = allLogs.length;
   const byClassification: Record<string, number> = {};
+  const byStatus: Record<string, number> = {};
   let highSensitivity = 0;
 
   for (const log of allLogs) {
     const cls = log.classification || 'unknown';
     byClassification[cls] = (byClassification[cls] || 0) + 1;
+    const s = log.status || 'unknown';
+    byStatus[s] = (byStatus[s] || 0) + 1;
     if (log.sensitivity === 'high') highSensitivity++;
   }
 
-  res.json({ total, byClassification, highSensitivity });
+  res.json({ total, byClassification, byStatus, highSensitivity });
 });
 
 router.get('/:id', async (req, res) => {

@@ -1,5 +1,7 @@
 import { Outlet, NavLink } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import Magpie from './Magpie';
+import { getPendingCount } from '../api';
 
 const NAV_ITEMS = [
   { to: '/dashboard', label: 'Dashboard' },
@@ -8,6 +10,13 @@ const NAV_ITEMS = [
 ];
 
 export default function Layout() {
+  const { data: pendingData } = useQuery({
+    queryKey: ['pending-count'],
+    queryFn: () => getPendingCount().then((r) => r.data),
+    refetchInterval: 30_000,
+  });
+  const pendingCount = pendingData?.pending ?? 0;
+
   const handleLogout = () => {
     localStorage.removeItem('swoop_token');
     window.location.assign('/login');
@@ -38,14 +47,19 @@ export default function Layout() {
               key={to}
               to={to}
               className={({ isActive }) =>
-                `block px-3.5 py-2 rounded-xl text-sm font-semibold transition-all ${
+                `flex items-center justify-between px-3.5 py-2 rounded-xl text-sm font-semibold transition-all ${
                   isActive
                     ? 'bg-white text-ink shadow-sticker-sm -rotate-1'
                     : 'text-white/50 hover:text-white hover:bg-white/10'
                 }`
               }
             >
-              {label}
+              <span>{label}</span>
+              {to === '/dashboard' && pendingCount > 0 && (
+                <span className="bg-amber-400 text-ink text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[1.25rem] text-center leading-none">
+                  {pendingCount > 99 ? '99+' : pendingCount}
+                </span>
+              )}
             </NavLink>
           ))}
         </nav>

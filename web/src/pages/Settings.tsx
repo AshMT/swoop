@@ -4,10 +4,46 @@ import api from '../api';
 
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 type TestResult = { ok: boolean; error?: string; endpoint?: string } | null;
+type ChipStatus = 'not-configured' | 'configured' | 'connected' | 'error';
+
+function StatusChip({ status }: { status: ChipStatus }) {
+  const ring = {
+    'not-configured': 'bg-gray-100 text-gray-500 ring-1 ring-gray-200',
+    configured: 'bg-amber-50 text-amber-700 ring-1 ring-amber-200',
+    connected: 'bg-green-50 text-green-700 ring-1 ring-green-200',
+    error: 'bg-red-50 text-red-700 ring-1 ring-red-200',
+  }[status];
+  const dot = {
+    'not-configured': 'bg-gray-400',
+    configured: 'bg-amber-400',
+    connected: 'bg-green-500',
+    error: 'bg-red-500',
+  }[status];
+  const label = {
+    'not-configured': 'Not configured',
+    configured: 'Saved',
+    connected: 'Connected ✓',
+    error: 'Error',
+  }[status];
+  return (
+    <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium ${ring}`}>
+      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${dot}`} />
+      {label}
+    </span>
+  );
+}
+
+function deriveStatus(hasSaved: boolean, test: TestResult): ChipStatus {
+  if (test?.ok === true) return 'connected';
+  if (test?.ok === false) return 'error';
+  if (hasSaved) return 'configured';
+  return 'not-configured';
+}
 
 export default function Settings() {
   const [tenant, setTenant] = useState<Tenant | null>(null);
   const [loading, setLoading] = useState(true);
+  const [showCippGuide, setShowCippGuide] = useState(false);
 
   // SuperOps fields
   const [subdomain, setSubdomain] = useState('');
@@ -52,11 +88,16 @@ export default function Settings() {
       .finally(() => setLoading(false));
   }, []);
 
+  // Derived statuses
+  const superopsStatus = deriveStatus(!!tenant?.superopsSubdomain, superopsTest);
+  const aiStatus = deriveStatus(!!(tenant?.aiBaseUrl && tenant?.aiModel), aiTest);
+  const cippStatus = deriveStatus(
+    !!(tenant?.cippBaseUrl && tenant?.cippClientId && tenant?.cippOauthTenantId),
+    cippTest,
+  );
+
   const handleSubdomainChange = (val: string) => {
-    const clean = val
-      .replace(/^https?:\/\//, '')
-      .replace(/\/.*$/, '')
-      .trim();
+    const clean = val.replace(/^https?:\/\//, '').replace(/\/.*$/, '').trim();
     setSubdomain(clean);
     setSuperopsTest(null);
   };
@@ -166,26 +207,39 @@ export default function Settings() {
     }
   };
 
-  if (loading) {
-    return (
-      <div className="p-8 text-gray-400 text-sm">Loading...</div>
-    );
-  }
-
-  if (!tenant) {
-    return (
-      <div className="p-8 text-red-500 text-sm">No tenant found.</div>
-    );
-  }
+  if (loading) return <div className="p-8 text-gray-400 text-sm">Loading...</div>;
+  if (!tenant) return <div className="p-8 text-red-500 text-sm">No tenant found.</div>;
 
   return (
     <div className="p-8 max-w-2xl">
       <h1 className="text-xl font-bold text-gray-900 mb-1">Settings</h1>
-      <p className="text-sm text-gray-500 mb-8">Update your SuperOps connection and AI provider configuration.</p>
+      <p className="text-sm text-gray-500 mb-6">Configure your integrations and AI provider.</p>
+
+      {/* Integration status overview */}
+      <div className="sticker p-4 mb-8">
+        <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-3">Integration Status</p>
+        <div className="grid grid-cols-3 gap-3">
+          {(
+            [
+              { label: 'SuperOps', status: superopsStatus },
+              { label: 'AI Provider', status: aiStatus },
+              { label: 'CIPP', status: cippStatus },
+            ] as { label: string; status: ChipStatus }[]
+          ).map(({ label, status }) => (
+            <div key={label} className="flex flex-col items-center gap-1.5 py-2 px-3 rounded-lg bg-gray-50 border border-gray-100">
+              <span className="text-xs font-medium text-gray-600">{label}</span>
+              <StatusChip status={status} />
+            </div>
+          ))}
+        </div>
+      </div>
 
       {/* SuperOps section */}
       <section className="sticker p-6 mb-8">
-        <h2 className="text-base font-semibold text-gray-800 mb-4">SuperOps Connection</h2>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-base font-semibold text-gray-800">SuperOps Connection</h2>
+          <StatusChip status={superopsStatus} />
+        </div>
         <div className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Subdomain</label>
@@ -203,14 +257,23 @@ export default function Settings() {
             <div className="flex gap-4">
               {(['us', 'eu'] as const).map((r) => (
                 <label key={r} className="flex items-center gap-2 cursor-pointer">
-                  <input type="radio" name="region" value={r} checked={superopsRegion === r} onChange={() => { setSuperopsRegion(r); setSuperopsTest(null); }} className="accent-swoop-600" />
+                  <input
+                    type="radio"
+                    name="region"
+                    value={r}
+                    checked={superopsRegion === r}
+                    onChange={() => { setSuperopsRegion(r); setSuperopsTest(null); }}
+                    className="accent-swoop-600"
+                  />
                   <span className="text-sm text-gray-700">{r === 'us' ? 'US / Global' : 'EU'}</span>
                 </label>
               ))}
             </div>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">API Key <span className="text-gray-400 font-normal">(leave blank to keep existing)</span></label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              API Key <span className="text-gray-400 font-normal">(leave blank to keep existing)</span>
+            </label>
             <input
               type="password"
               value={superopsKey}
@@ -247,16 +310,18 @@ export default function Settings() {
               disabled={!subdomain || superopsSave === 'saving'}
               className="px-4 py-2 text-sm bg-swoop-600 text-white rounded-md hover:bg-swoop-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
-              {superopsSave === 'saving' ? 'Saving…' : superopsSave === 'saved' ? 'Saved!' : superopsSave === 'error' ? 'Error — try again' : 'Save'}
+              {superopsSave === 'saving' ? 'Saving…' : superopsSave === 'saved' ? 'Saved ✓' : superopsSave === 'error' ? 'Error — try again' : 'Save'}
             </button>
           </div>
         </div>
       </section>
 
-
       {/* AI section */}
       <section className="sticker p-6 mb-8">
-        <h2 className="text-base font-semibold text-gray-800 mb-4">AI Provider</h2>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-base font-semibold text-gray-800">AI Provider</h2>
+          <StatusChip status={aiStatus} />
+        </div>
         <div className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Base URL</label>
@@ -270,7 +335,9 @@ export default function Settings() {
             <p className="text-xs text-gray-400 mt-1">Ollama: <code>http://192.168.1.x:11434</code> — <code>/v1</code> is added automatically</p>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">API Key <span className="text-gray-400 font-normal">(leave blank to keep existing or if not required)</span></label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              API Key <span className="text-gray-400 font-normal">(leave blank to keep existing or if not required)</span>
+            </label>
             <input
               type="password"
               value={aiApiKey}
@@ -314,17 +381,64 @@ export default function Settings() {
               disabled={!aiBaseUrl || !aiModel || aiSave === 'saving'}
               className="px-4 py-2 text-sm bg-swoop-600 text-white rounded-md hover:bg-swoop-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
-              {aiSave === 'saving' ? 'Saving…' : aiSave === 'saved' ? 'Saved!' : aiSave === 'error' ? 'Error — try again' : 'Save'}
+              {aiSave === 'saving' ? 'Saving…' : aiSave === 'saved' ? 'Saved ✓' : aiSave === 'error' ? 'Error — try again' : 'Save'}
             </button>
           </div>
         </div>
       </section>
 
-
       {/* CIPP section */}
       <section className="sticker p-6 mb-8">
-        <h2 className="text-base font-semibold text-gray-800 mb-1">CIPP Integration</h2>
+        <div className="flex items-center justify-between mb-1">
+          <h2 className="text-base font-semibold text-gray-800">CIPP Integration</h2>
+          <StatusChip status={cippStatus} />
+        </div>
         <p className="text-sm text-gray-500 mb-4">Connect to your CIPP instance to enable automated M365 action execution.</p>
+
+        {/* Setup guide */}
+        <div className="mb-5 rounded-lg border border-gray-200 overflow-hidden">
+          <button
+            onClick={() => setShowCippGuide(!showCippGuide)}
+            className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 text-sm font-medium text-gray-700 hover:bg-gray-100 transition-colors"
+          >
+            <span className="flex items-center gap-2">
+              <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              How to connect CIPP
+            </span>
+            <svg className={`w-4 h-4 text-gray-400 transition-transform ${showCippGuide ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+          {showCippGuide && (
+            <div className="px-4 py-4 bg-white border-t border-gray-200">
+              <ol className="space-y-3 text-sm text-gray-700">
+                <li className="flex gap-3">
+                  <span className="flex-shrink-0 w-5 h-5 rounded-full bg-ink text-white text-xs flex items-center justify-center font-bold mt-0.5">1</span>
+                  <span>In CIPP, go to <strong>Settings → Backend → CIPP-API</strong> (or <strong>Integrations → CIPP-API</strong>). Copy the <strong>API URL</strong> shown at the top of that page.</span>
+                </li>
+                <li className="flex gap-3">
+                  <span className="flex-shrink-0 w-5 h-5 rounded-full bg-ink text-white text-xs flex items-center justify-center font-bold mt-0.5">2</span>
+                  <span>Click <strong>Add API Client</strong>. Name it <code className="bg-gray-100 px-1 rounded">swoop</code>. After saving, copy the <strong>Client ID</strong> from the client row.</span>
+                </li>
+                <li className="flex gap-3">
+                  <span className="flex-shrink-0 w-5 h-5 rounded-full bg-ink text-white text-xs flex items-center justify-center font-bold mt-0.5">3</span>
+                  <span>Click <strong>⋯ → Reset Application Secret</strong> on the swoop client row. Copy the secret — it's only shown once.</span>
+                </li>
+                <li className="flex gap-3">
+                  <span className="flex-shrink-0 w-5 h-5 rounded-full bg-ink text-white text-xs flex items-center justify-center font-bold mt-0.5">4</span>
+                  <span>Your <strong>MSP Azure Tenant ID</strong> is in <strong>Azure Entra admin centre → Overview → Tenant ID</strong>. This is your partner tenant, not a customer's.</span>
+                </li>
+                <li className="flex gap-3">
+                  <span className="flex-shrink-0 w-5 h-5 rounded-full bg-ink text-white text-xs flex items-center justify-center font-bold mt-0.5">5</span>
+                  <span>Paste all four values below, click <strong>Save</strong>, then <strong>Test Connection</strong>.</span>
+                </li>
+              </ol>
+            </div>
+          )}
+        </div>
+
         <div className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">CIPP API URL</label>
@@ -335,7 +449,7 @@ export default function Settings() {
               placeholder="https://cippmbwij.azurewebsites.net"
               className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-swoop-500"
             />
-            <p className="text-xs text-gray-400 mt-1">The Azure Function App URL shown on the CIPP-API integration page</p>
+            <p className="text-xs text-gray-400 mt-1">The Azure Function App URL from the CIPP-API page</p>
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Client ID</label>
@@ -346,15 +460,16 @@ export default function Settings() {
               placeholder="36b5f3c3-f5a0-4a3c-88b9-4402e069c7da"
               className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-swoop-500"
             />
-            <p className="text-xs text-gray-400 mt-1">From CIPP → Integrations → CIPP-API → your client row</p>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Client Secret <span className="text-gray-400 font-normal">(leave blank to keep existing)</span></label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Client Secret <span className="text-gray-400 font-normal">(leave blank to keep existing)</span>
+            </label>
             <input
               type="password"
               value={cippClientSecret}
               onChange={(e) => { setCippClientSecret(e.target.value); setCippTest(null); }}
-              placeholder="Reset Application Secret in CIPP to get this"
+              placeholder={tenant.cippClientId ? '••••••••  (already set)' : 'Reset Application Secret in CIPP to get this'}
               className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-swoop-500"
             />
           </div>
@@ -367,7 +482,7 @@ export default function Settings() {
               placeholder="fe23cefe-51b6-4021-a7e0-38dd7cd0a582"
               className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-swoop-500"
             />
-            <p className="text-xs text-gray-400 mt-1">Your MSP's Azure AD tenant ID — from Entra admin centre → Overview</p>
+            <p className="text-xs text-gray-400 mt-1">Your MSP's Azure AD tenant ID — Entra admin centre → Overview</p>
           </div>
 
           {cippTest && (
@@ -375,7 +490,7 @@ export default function Settings() {
               {cippTest.ok ? 'CIPP connected successfully.' : (
                 <div>
                   <div className="font-medium">CIPP connection failed</div>
-                  {cippTest.error && <div className="mt-1">{cippTest.error}</div>}
+                  {cippTest.error && <div className="mt-1 font-mono text-xs whitespace-pre-wrap break-all">{cippTest.error}</div>}
                 </div>
               )}
             </div>
@@ -394,12 +509,11 @@ export default function Settings() {
               disabled={(!cippBaseUrl && !cippClientId && !cippClientSecret && !cippOauthTenantId) || cippSave === 'saving'}
               className="px-4 py-2 text-sm bg-swoop-600 text-white rounded-md hover:bg-swoop-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
-              {cippSave === 'saving' ? 'Saving…' : cippSave === 'saved' ? 'Saved!' : cippSave === 'error' ? 'Error — try again' : 'Save'}
+              {cippSave === 'saving' ? 'Saving…' : cippSave === 'saved' ? 'Saved ✓' : cippSave === 'error' ? 'Error — try again' : 'Save'}
             </button>
           </div>
         </div>
       </section>
-
 
       {/* Tenant info */}
       <section className="sticker p-6">

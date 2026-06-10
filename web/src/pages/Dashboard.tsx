@@ -232,9 +232,20 @@ function ActionRow({ log, client }: { log: ActionLog; client?: Client }) {
   );
 }
 
+const STATUS_OPTIONS = [
+  { value: '', label: 'All statuses' },
+  { value: 'awaiting_approval', label: 'Awaiting approval' },
+  { value: 'executed', label: 'Executed' },
+  { value: 'rejected', label: 'Rejected' },
+  { value: 'failed', label: 'Failed' },
+  { value: 'escalated', label: 'Escalated' },
+  { value: 'follow_up', label: 'Follow-up' },
+];
+
 export default function Dashboard() {
   const [filterClient, setFilterClient] = useState('');
   const [filterClassification, setFilterClassification] = useState('');
+  const [filterStatus, setFilterStatus] = useState('');
 
   const { data: tenants } = useQuery({ queryKey: ['tenants'], queryFn: () => getTenants().then((r) => r.data) });
   const tenantId = tenants?.[0]?.id;
@@ -253,13 +264,14 @@ export default function Dashboard() {
   });
 
   const { data: actions = [], isLoading } = useQuery({
-    queryKey: ['actions', tenantId, filterClient, filterClassification],
+    queryKey: ['actions', tenantId, filterClient, filterClassification, filterStatus],
     queryFn: () =>
       getActions({
         tenantId,
         clientId: filterClient || undefined,
         classification: filterClassification || undefined,
-        limit: 50,
+        status: filterStatus || undefined,
+        limit: 100,
       }).then((r) => r.data),
     enabled: !!tenantId,
     refetchInterval: 30_000,
@@ -269,7 +281,7 @@ export default function Dashboard() {
   for (const c of clients) clientMap[c.id] = c;
 
   const classifications = Object.keys(stats?.byClassification || {});
-  const pendingApproval = actions.filter((a) => a.status === 'awaiting_approval').length;
+  const byStatus = stats?.byStatus || {};
 
   return (
     <div className="p-6">
@@ -281,19 +293,32 @@ export default function Dashboard() {
 
       {/* Stats */}
       {stats && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-6">
           <div className="sticker p-4">
             <div className="text-2xl font-bold text-gray-900">{stats.total}</div>
             <div className="text-xs text-gray-500 mt-1">Total processed</div>
           </div>
-          <div className="sticker p-4">
-            <div className="text-2xl font-bold text-amber-600">{pendingApproval}</div>
+          <button
+            onClick={() => setFilterStatus(filterStatus === 'awaiting_approval' ? '' : 'awaiting_approval')}
+            className={`sticker p-4 text-left transition-all ${filterStatus === 'awaiting_approval' ? 'ring-2 ring-amber-400' : 'hover:scale-[1.01]'}`}
+          >
+            <div className="text-2xl font-bold text-amber-600">{byStatus['awaiting_approval'] || 0}</div>
             <div className="text-xs text-gray-500 mt-1">Awaiting approval</div>
-          </div>
-          <div className="sticker p-4">
-            <div className="text-2xl font-bold text-red-600">{stats.byClassification['ESCALATE'] || 0}</div>
+          </button>
+          <button
+            onClick={() => setFilterStatus(filterStatus === 'executed' ? '' : 'executed')}
+            className={`sticker p-4 text-left transition-all ${filterStatus === 'executed' ? 'ring-2 ring-green-400' : 'hover:scale-[1.01]'}`}
+          >
+            <div className="text-2xl font-bold text-green-600">{byStatus['executed'] || 0}</div>
+            <div className="text-xs text-gray-500 mt-1">Executed</div>
+          </button>
+          <button
+            onClick={() => setFilterStatus(filterStatus === 'escalated' ? '' : 'escalated')}
+            className={`sticker p-4 text-left transition-all ${filterStatus === 'escalated' ? 'ring-2 ring-red-400' : 'hover:scale-[1.01]'}`}
+          >
+            <div className="text-2xl font-bold text-red-600">{byStatus['escalated'] || 0}</div>
             <div className="text-xs text-gray-500 mt-1">Escalated</div>
-          </div>
+          </button>
           <div className="sticker p-4">
             <div className="text-2xl font-bold text-red-700">{stats.highSensitivity}</div>
             <div className="text-xs text-gray-500 mt-1">High sensitivity</div>
@@ -323,6 +348,23 @@ export default function Dashboard() {
             <option key={cls} value={cls}>{cls}</option>
           ))}
         </select>
+        <select
+          value={filterStatus}
+          onChange={(e) => setFilterStatus(e.target.value)}
+          className="px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-swoop-500"
+        >
+          {STATUS_OPTIONS.map(({ value, label }) => (
+            <option key={value} value={value}>{label}</option>
+          ))}
+        </select>
+        {(filterClient || filterClassification || filterStatus) && (
+          <button
+            onClick={() => { setFilterClient(''); setFilterClassification(''); setFilterStatus(''); }}
+            className="px-3 py-2 text-sm text-gray-500 hover:text-gray-800 border border-gray-200 rounded-lg bg-white hover:bg-gray-50 transition-colors"
+          >
+            Clear filters
+          </button>
+        )}
       </div>
 
       {/* Table */}
