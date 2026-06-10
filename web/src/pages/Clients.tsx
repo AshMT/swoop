@@ -5,11 +5,12 @@ import { getClients, getTenants, createClient, updateClient, deleteClient, type 
 export default function Clients() {
   const queryClient = useQueryClient();
   const [showAdd, setShowAdd] = useState(false);
-  const [newName, setNewName] = useState('');
-  const [newCompanyId, setNewCompanyId] = useState('');
-  const [newCippTenantId, setNewCippTenantId] = useState('');
-  const [newEnabled, setNewEnabled] = useState(false);
-  const [addError, setAddError] = useState('');
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [name, setName] = useState('');
+  const [companyId, setCompanyId] = useState('');
+  const [cippTenantId, setCippTenantId] = useState('');
+  const [enabled, setEnabled] = useState(false);
+  const [formError, setFormError] = useState('');
 
   const { data: tenants } = useQuery({ queryKey: ['tenants'], queryFn: () => getTenants().then((r) => r.data) });
   const tenantId = tenants?.[0]?.id || '';
@@ -20,44 +21,81 @@ export default function Clients() {
     enabled: !!tenantId,
   });
 
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ['clients'] });
+
   const toggleMutation = useMutation({
-    mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
-      updateClient(id, { automationEnabled: enabled }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['clients'] }),
+    mutationFn: ({ id, on }: { id: string; on: boolean }) => updateClient(id, { automationEnabled: on }),
+    onSuccess: invalidate,
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => deleteClient(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['clients'] }),
+    onSuccess: invalidate,
   });
+
+  const formOpen = showAdd || editingId !== null;
+  const isEditing = editingId !== null;
+
+  const resetForm = () => {
+    setShowAdd(false);
+    setEditingId(null);
+    setName('');
+    setCompanyId('');
+    setCippTenantId('');
+    setEnabled(false);
+    setFormError('');
+  };
+
+  const startAdd = () => {
+    resetForm();
+    setShowAdd(true);
+  };
+
+  const startEdit = (c: Client) => {
+    setEditingId(c.id);
+    setShowAdd(false);
+    setName(c.name);
+    setCompanyId(c.superopsCompanyId || '');
+    setCippTenantId(c.cippTenantId || '');
+    setEnabled(c.automationEnabled);
+    setFormError('');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const onError = (err: any) => setFormError(err.response?.data?.error || 'Failed to save client');
 
   const createMutation = useMutation({
     mutationFn: () =>
       createClient({
         tenantId,
-        name: newName,
-        superopsCompanyId: newCompanyId || undefined,
-        cippTenantId: newCippTenantId || undefined,
-        automationEnabled: newEnabled,
+        name,
+        superopsCompanyId: companyId || undefined,
+        cippTenantId: cippTenantId || undefined,
+        automationEnabled: enabled,
       }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['clients'] });
-      setShowAdd(false);
-      setNewName('');
-      setNewCompanyId('');
-      setNewCippTenantId('');
-      setNewEnabled(false);
-      setAddError('');
-    },
-    onError: (err: any) => {
-      setAddError(err.response?.data?.error || 'Failed to add client');
-    },
+    onSuccess: () => { invalidate(); resetForm(); },
+    onError,
   });
 
-  const handleCreate = (e: React.FormEvent) => {
+  const updateMutation = useMutation({
+    mutationFn: () =>
+      updateClient(editingId!, {
+        name,
+        superopsCompanyId: companyId || null,
+        cippTenantId: cippTenantId || null,
+        automationEnabled: enabled,
+      } as Partial<Client>),
+    onSuccess: () => { invalidate(); resetForm(); },
+    onError,
+  });
+
+  const saving = createMutation.isPending || updateMutation.isPending;
+
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newName.trim()) return;
-    createMutation.mutate();
+    if (!name.trim()) return;
+    if (isEditing) updateMutation.mutate();
+    else createMutation.mutate();
   };
 
   return (
@@ -68,28 +106,28 @@ export default function Clients() {
           <p className="text-gray-500 text-sm mt-1">Enable/disable ticket automation per client (allowlist model)</p>
         </div>
         <button
-          onClick={() => setShowAdd(true)}
+          onClick={startAdd}
           className="bg-swoop-600 hover:bg-swoop-700 text-white font-medium px-4 py-2 rounded-lg text-sm"
         >
           Add client
         </button>
       </div>
 
-      {/* Add client form */}
-      {showAdd && (
+      {/* Add / Edit client form */}
+      {formOpen && (
         <div className="sticker p-5 mb-6">
-          <h3 className="font-semibold text-gray-900 mb-4">Add client</h3>
-          {addError && (
-            <div className="bg-red-50 text-red-700 border border-red-200 rounded p-3 text-sm mb-3">{addError}</div>
+          <h3 className="font-semibold text-gray-900 mb-4">{isEditing ? 'Edit client' : 'Add client'}</h3>
+          {formError && (
+            <div className="bg-red-50 text-red-700 border border-red-200 rounded p-3 text-sm mb-3">{formError}</div>
           )}
-          <form onSubmit={handleCreate} className="space-y-3">
+          <form onSubmit={handleSubmit} className="space-y-3">
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Client name *</label>
                 <input
                   type="text"
-                  value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
                   required
                   autoFocus
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-swoop-500"
@@ -100,8 +138,8 @@ export default function Clients() {
                 <label className="block text-sm font-medium text-gray-700 mb-1">SuperOps Company ID</label>
                 <input
                   type="text"
-                  value={newCompanyId}
-                  onChange={(e) => setNewCompanyId(e.target.value)}
+                  value={companyId}
+                  onChange={(e) => setCompanyId(e.target.value)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-swoop-500"
                   placeholder="Optional"
                 />
@@ -110,19 +148,19 @@ export default function Clients() {
                 <label className="block text-sm font-medium text-gray-700 mb-1">CIPP Tenant ID</label>
                 <input
                   type="text"
-                  value={newCippTenantId}
-                  onChange={(e) => setNewCippTenantId(e.target.value)}
+                  value={cippTenantId}
+                  onChange={(e) => setCippTenantId(e.target.value)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-swoop-500"
                   placeholder="contoso.onmicrosoft.com"
                 />
-                <p className="text-xs text-gray-400 mt-1">The M365 tenant domain used by CIPP (e.g. contoso.onmicrosoft.com)</p>
+                <p className="text-xs text-gray-400 mt-1">The M365 tenant domain used by CIPP (e.g. contoso.onmicrosoft.com) — required for action execution</p>
               </div>
             </div>
             <label className="flex items-center gap-2 cursor-pointer">
               <input
                 type="checkbox"
-                checked={newEnabled}
-                onChange={(e) => setNewEnabled(e.target.checked)}
+                checked={enabled}
+                onChange={(e) => setEnabled(e.target.checked)}
                 className="w-4 h-4 rounded text-swoop-600"
               />
               <span className="text-sm text-gray-700">Enable automation (classify tickets immediately)</span>
@@ -130,17 +168,19 @@ export default function Clients() {
             <div className="flex gap-2 pt-1">
               <button
                 type="button"
-                onClick={() => { setShowAdd(false); setAddError(''); }}
+                onClick={resetForm}
                 className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-lg hover:bg-gray-50"
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                disabled={createMutation.isPending}
+                disabled={saving}
                 className="px-4 py-2 bg-swoop-600 hover:bg-swoop-700 disabled:opacity-60 text-white text-sm font-medium rounded-lg"
               >
-                {createMutation.isPending ? 'Adding...' : 'Add client'}
+                {isEditing
+                  ? (saving ? 'Saving...' : 'Save changes')
+                  : (saving ? 'Adding...' : 'Add client')}
               </button>
             </div>
           </form>
@@ -170,19 +210,19 @@ export default function Clients() {
             </thead>
             <tbody className="divide-y divide-gray-100">
               {clients.map((client) => (
-                <tr key={client.id} className="hover:bg-gray-50">
+                <tr key={client.id} className={`hover:bg-gray-50 ${editingId === client.id ? 'bg-swoop-50' : ''}`}>
                   <td className="px-4 py-3 text-sm font-medium text-gray-900">{client.name}</td>
                   <td className="px-4 py-3 text-sm text-gray-500 font-mono">
                     {client.superopsCompanyId || <span className="text-gray-400 font-sans">—</span>}
                   </td>
-                  <td className="px-4 py-3 text-sm text-gray-500 font-mono">
-                    {client.cippTenantId || <span className="text-gray-400 font-sans">—</span>}
+                  <td className="px-4 py-3 text-sm font-mono">
+                    {client.cippTenantId
+                      ? <span className="text-gray-500">{client.cippTenantId}</span>
+                      : <span className="text-amber-600 font-sans text-xs">Not set — actions can't run</span>}
                   </td>
                   <td className="px-4 py-3">
                     <button
-                      onClick={() =>
-                        toggleMutation.mutate({ id: client.id, enabled: !client.automationEnabled })
-                      }
+                      onClick={() => toggleMutation.mutate({ id: client.id, on: !client.automationEnabled })}
                       disabled={toggleMutation.isPending}
                       className={`relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none ${
                         client.automationEnabled ? 'bg-swoop-600' : 'bg-gray-200'
@@ -201,7 +241,13 @@ export default function Clients() {
                   <td className="px-4 py-3 text-xs text-gray-400">
                     {client.createdAt ? new Date(client.createdAt * 1000).toLocaleDateString() : '—'}
                   </td>
-                  <td className="px-4 py-3 text-right">
+                  <td className="px-4 py-3 text-right whitespace-nowrap">
+                    <button
+                      onClick={() => startEdit(client)}
+                      className="text-xs text-swoop-600 hover:text-swoop-700 font-medium mr-4"
+                    >
+                      Edit
+                    </button>
                     <button
                       onClick={() => {
                         if (confirm(`Remove ${client.name}?`)) {
