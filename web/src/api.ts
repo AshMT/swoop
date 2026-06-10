@@ -113,6 +113,9 @@ export const retryAction = (id: string) =>
 export const getExecutionLog = (actionId: string) =>
   api.get<ExecutionLog>(`/actions/${actionId}/execution`);
 
+export const getActionFeed = (actionId: string) =>
+  api.get<FeedStep[]>(`/actions/${actionId}/feed`);
+
 // ─── Policies ─────────────────────────────────────────────────────────────────
 export const getPolicies = (tenantId: string) =>
   api.get<ActionPolicy[]>('/policies', { params: { tenantId } });
@@ -218,6 +221,11 @@ export interface ActionLog {
   verifiedBy: string | null;
   verifiedAt: number | null;
   createdAt: number | null;
+}
+
+export interface FeedStep {
+  ts: number;
+  message: string;
 }
 
 export interface ExecutionLog {

@@ -5,7 +5,7 @@ import { eq, desc, and } from 'drizzle-orm';
 import { requireAuth, type AuthRequest } from '../../middleware/auth';
 import { executeAction } from '../../services/executor';
 import { getPolicy } from '../../services/policies';
-import { getActivePipeline } from '../../services/pipeline';
+import { getActivePipeline, getExecFeed } from '../../services/pipeline';
 import { classifyTicket } from '../../services/ai';
 import { formatProposalNote } from '../../services/poller';
 
@@ -257,6 +257,11 @@ router.post('/:id/reject', async (req: AuthRequest, res) => {
 
   const [updated] = await db.select().from(actionLogs).where(eq(actionLogs.id, id)).limit(1);
   res.json(updated);
+});
+
+// Live execution step feed for a single action (in-memory, ephemeral).
+router.get('/:id/feed', (req, res) => {
+  res.json(getExecFeed(req.params.id));
 });
 
 router.get('/:id/execution', async (req, res) => {

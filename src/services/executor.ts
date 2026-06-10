@@ -4,6 +4,7 @@ import { eq } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
 import { CippClient } from './cipp';
 import { decrypt } from './crypto';
+import { addExecStep } from './pipeline';
 import type { AiClassification } from '../types';
 
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || '';
@@ -19,6 +20,8 @@ export async function executeAction(
   approvedBy: string,
   verification?: VerificationInfo,
 ): Promise<void> {
+  const step = (message: string) => addExecStep(actionLogId, message);
+
   const [actionLog] = await db.select().from(actionLogs).where(eq(actionLogs.id, actionLogId)).limit(1);
   if (!actionLog) throw new Error(`Action log ${actionLogId} not found`);
   if (actionLog.status !== 'awaiting_approval') {
@@ -28,15 +31,21 @@ export async function executeAction(
     throw new Error(`Classification "${actionLog.classification}" is not executable`);
   }
 
+  step(`Executing ${actionLog.classification} for ticket #${actionLog.ticketId}`);
+
   const [tenant] = await db.select().from(tenants).where(eq(tenants.id, actionLog.tenantId!)).limit(1);
   if (!tenant) throw new Error('Tenant not found');
   if (!tenant.cippBaseUrl || !tenant.cippClientId || !tenant.cippClientSecret || !tenant.cippOauthTenantId) {
     throw new Error('CIPP not fully configured for this tenant — set Base URL, Client ID, Client Secret, and Tenant ID in Settings');
   }
 
+  step(`Verified: CIPP configured at ${tenant.cippBaseUrl}`);
+
   const [client] = await db.select().from(clients).where(eq(clients.id, actionLog.clientId!)).limit(1);
   if (!client) throw new Error('Client not found');
   if (!client.cippTenantId) throw new Error(`Client "${client.name}" has no CIPP Tenant ID — edit the client in the Clients page and set its CIPP Tenant ID (e.g. contoso.onmicrosoft.com)`);
+
+  step(`Target tenant: ${client.cippTenantId} (${client.name})`);
 
   // Mark approved before executing
   const now = Math.floor(Date.now() / 1000);
@@ -74,7 +83,7 @@ export async function executeAction(
     proposed_psa_note: actionLog.proposedPsaNote ?? '',
   };
 
-  const result = await cipp.execute(classification, client.cippTenantId);
+  const result = await cipp.execute(classification, client.cippTenantId, step);
 
   await db.insert(executionLogs).values({
     id: uuidv4(),
@@ -83,6 +92,8 @@ export async function executeAction(
     response: result.response ? JSON.stringify(result.response) : null,
     error: result.error ?? null,
   });
+
+  step(result.ok ? 'Execution log saved — action complete' : 'Execution log saved — action failed');
 
   await db
     .update(actionLogs)

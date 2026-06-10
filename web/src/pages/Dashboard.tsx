@@ -2,8 +2,8 @@ import { Fragment, useEffect, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   getActions, getActionStats, getClients, getTenants, getPolicies, getProcessing,
-  approveAction, rejectAction, retryAction, getExecutionLog,
-  type ActionLog, type ActionPolicy, type Client, type ExecutionLog,
+  approveAction, rejectAction, retryAction, getExecutionLog, getActionFeed,
+  type ActionLog, type ActionPolicy, type Client, type ExecutionLog, type FeedStep,
   type PipelineEntry, type PipelineStage,
 } from '../api';
 
@@ -204,6 +204,70 @@ function LiveProcessing({ tenantId }: { tenantId?: string }) {
   );
 }
 
+function stepIcon(msg: string): string {
+  if (msg.startsWith('Executing ')) return '▶';
+  if (msg.startsWith('Verified:')) return '✓';
+  if (msg.startsWith('Target tenant:')) return '🏢';
+  if (msg.startsWith('Requesting OAuth')) return '🔐';
+  if (msg.startsWith('Token acquired')) return '🔑';
+  if (msg.startsWith('Calling CIPP')) return '📡';
+  if (msg.startsWith('Done —')) return '✅';
+  if (msg.startsWith('Failed:')) return '❌';
+  if (msg.startsWith('Execution log saved')) return '💾';
+  return '›';
+}
+
+function ExecFeed({ actionId, active }: { actionId: string; active: boolean }) {
+  const feedRef = useRef<HTMLDivElement>(null);
+
+  const { data: steps = [] } = useQuery<FeedStep[]>({
+    queryKey: ['feed', actionId],
+    queryFn: () => getActionFeed(actionId).then((r) => r.data),
+    refetchInterval: active ? 1_000 : false,
+    retry: false,
+    staleTime: 0,
+  });
+
+  useEffect(() => {
+    if (feedRef.current) {
+      feedRef.current.scrollTop = feedRef.current.scrollHeight;
+    }
+  }, [steps.length]);
+
+  if (steps.length === 0 && !active) return null;
+
+  return (
+    <div
+      ref={feedRef}
+      className="bg-gray-900 rounded-lg px-4 py-3 font-mono text-xs overflow-auto max-h-48 space-y-1"
+    >
+      {steps.length === 0 ? (
+        <span className="text-gray-500 animate-pulse">Waiting for execution to start...</span>
+      ) : (
+        steps.map((s, i) => {
+          const icon = stepIcon(s.message);
+          const isError = s.message.startsWith('Failed:');
+          const isDone = s.message.startsWith('Done —');
+          const textColor = isError ? 'text-red-400' : isDone ? 'text-green-400' : 'text-gray-300';
+          const iconColor = isError ? 'text-red-500' : isDone ? 'text-green-500' : 'text-swoop-400';
+          return (
+            <div key={i} className="flex items-start gap-2">
+              <span className={`shrink-0 ${iconColor}`}>{icon}</span>
+              <span className={textColor}>{s.message}</span>
+            </div>
+          );
+        })
+      )}
+      {active && steps.length > 0 && (
+        <div className="flex items-center gap-2 pt-0.5">
+          <span className="w-1.5 h-1.5 rounded-full bg-swoop-400 animate-pulse shrink-0" />
+          <span className="text-gray-500">Running...</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ActionRow({ log, client, policy }: { log: ActionLog; client?: Client; policy?: ActionPolicy }) {
   const [expanded, setExpanded] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
@@ -220,6 +284,15 @@ function ActionRow({ log, client, policy }: { log: ActionLog; client?: Client; p
     enabled: expanded && (log.status === 'executed' || log.status === 'failed'),
     retry: false,
   });
+
+  // While executing, poll the main actions list so the status chip updates when done.
+  useEffect(() => {
+    if (log.status !== 'executing') return;
+    const interval = setInterval(() => {
+      void queryClient.invalidateQueries({ queryKey: ['actions'] });
+    }, 2_000);
+    return () => clearInterval(interval);
+  }, [log.status, queryClient]);
 
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ['actions'] });
@@ -301,12 +374,29 @@ function ActionRow({ log, client, policy }: { log: ActionLog; client?: Client; p
                 </div>
               )}
 
+              {/* Live execution feed */}
+              {(log.status === 'executing' || log.status === 'executed' || log.status === 'failed') && (
+                <div className="md:col-span-2">
+                  <h4 className="font-medium text-gray-700 mb-2">
+                    {log.status === 'executing' ? (
+                      <span className="flex items-center gap-2">
+                        <span className="relative flex h-2 w-2">
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-swoop-400 opacity-75" />
+                          <span className="relative inline-flex rounded-full h-2 w-2 bg-swoop-500" />
+                        </span>
+                        Executing...
+                      </span>
+                    ) : 'Execution log'}
+                  </h4>
+                  <ExecFeed actionId={log.id} active={log.status === 'executing'} />
+                </div>
+              )}
+
               {/* Execution result */}
               {executionLog && (
                 <div className="md:col-span-2">
-                  <h4 className="font-medium text-gray-700 mb-1">Execution result</h4>
                   <div className={`rounded-lg border p-3 text-xs ${executionLog.result === 'success' ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}`}>
-                    <div className="font-medium mb-1">{executionLog.result === 'success' ? 'Success' : 'Failed'}</div>
+                    <div className="font-medium mb-1">{executionLog.result === 'success' ? '✅ CIPP response received' : '❌ Execution failed'}</div>
                     {executionLog.error && <div className="text-red-700">Error: {executionLog.error}</div>}
                     {executionLog.response && (
                       <pre className="mt-1 text-gray-600 whitespace-pre-wrap overflow-auto max-h-32">{executionLog.response}</pre>

@@ -141,102 +141,128 @@ export class CippClient {
     }
   }
 
-  async execute(classification: AiClassification, cippTenantId: string): Promise<CippActionResult> {
+  async execute(
+    classification: AiClassification,
+    cippTenantId: string,
+    onStep?: (message: string) => void,
+  ): Promise<CippActionResult> {
     const { classification: action, entities } = classification;
     const tenantFilter = cippTenantId;
 
     try {
+      onStep?.('Requesting OAuth token from Microsoft...');
+      await this.getToken();
+      onStep?.('Token acquired');
+
       let response: unknown;
 
       switch (action) {
         case 'password_reset': {
           if (!entities.target_user_email) throw new Error('target_user_email required for password_reset');
+          onStep?.(`Calling CIPP ExecResetPass for ${entities.target_user_email}...`);
           response = await this.request('/api/ExecResetPass', {
             TenantFilter: tenantFilter,
             Id: entities.target_user_email,
             sendResults: 'true',
           });
+          onStep?.(`Password reset triggered for ${entities.target_user_email}`);
           break;
         }
 
         case 'account_disable': {
           if (!entities.target_user_email) throw new Error('target_user_email required for account_disable');
+          onStep?.(`Calling CIPP ExecDisableUser for ${entities.target_user_email}...`);
           response = await this.request('/api/ExecDisableUser', {
             TenantFilter: tenantFilter,
             Id: entities.target_user_email,
           });
+          onStep?.(`Account disabled: ${entities.target_user_email}`);
           break;
         }
 
         case 'account_enable': {
           if (!entities.target_user_email) throw new Error('target_user_email required for account_enable');
+          onStep?.(`Calling CIPP ExecEnableUser for ${entities.target_user_email}...`);
           response = await this.request('/api/ExecEnableUser', {
             TenantFilter: tenantFilter,
             Id: entities.target_user_email,
           });
+          onStep?.(`Account enabled: ${entities.target_user_email}`);
           break;
         }
 
         case 'mfa_reset': {
           if (!entities.target_user_email) throw new Error('target_user_email required for mfa_reset');
+          onStep?.(`Calling CIPP ExecResetMFA for ${entities.target_user_email}...`);
           response = await this.request('/api/ExecResetMFA', {
             TenantFilter: tenantFilter,
             Id: entities.target_user_email,
           });
+          onStep?.(`MFA reset for ${entities.target_user_email}`);
           break;
         }
 
         case 'group_add': {
           if (!entities.target_user_email) throw new Error('target_user_email required for group_add');
           if (!entities.group_name) throw new Error('group_name required for group_add');
+          onStep?.(`Calling CIPP EditGroup — adding ${entities.target_user_email} to "${entities.group_name}"...`);
           response = await this.request(
             '/api/EditGroup',
             { TenantFilter: tenantFilter },
             { action: 'Add', groupName: entities.group_name, userIds: [entities.target_user_email] },
           );
+          onStep?.(`Added ${entities.target_user_email} to group "${entities.group_name}"`);
           break;
         }
 
         case 'group_remove': {
           if (!entities.target_user_email) throw new Error('target_user_email required for group_remove');
           if (!entities.group_name) throw new Error('group_name required for group_remove');
+          onStep?.(`Calling CIPP EditGroup — removing ${entities.target_user_email} from "${entities.group_name}"...`);
           response = await this.request(
             '/api/EditGroup',
             { TenantFilter: tenantFilter },
             { action: 'Remove', groupName: entities.group_name, userIds: [entities.target_user_email] },
           );
+          onStep?.(`Removed ${entities.target_user_email} from group "${entities.group_name}"`);
           break;
         }
 
         case 'license_assign': {
           if (!entities.target_user_email) throw new Error('target_user_email required for license_assign');
           if (!entities.license_sku) throw new Error('license_sku required for license_assign');
+          onStep?.(`Calling CIPP EditUser — assigning license ${entities.license_sku} to ${entities.target_user_email}...`);
           response = await this.request(
             '/api/EditUser',
             { TenantFilter: tenantFilter },
             { id: entities.target_user_email, licenses: [{ skuId: entities.license_sku }], licenseAction: 'Add' },
           );
+          onStep?.(`License ${entities.license_sku} assigned to ${entities.target_user_email}`);
           break;
         }
 
         case 'license_remove': {
           if (!entities.target_user_email) throw new Error('target_user_email required for license_remove');
           if (!entities.license_sku) throw new Error('license_sku required for license_remove');
+          onStep?.(`Calling CIPP EditUser — removing license ${entities.license_sku} from ${entities.target_user_email}...`);
           response = await this.request(
             '/api/EditUser',
             { TenantFilter: tenantFilter },
             { id: entities.target_user_email, licenses: [{ skuId: entities.license_sku }], licenseAction: 'Remove' },
           );
+          onStep?.(`License ${entities.license_sku} removed from ${entities.target_user_email}`);
           break;
         }
 
         case 'mailbox_permission': {
           if (!entities.target_user_email) throw new Error('target_user_email required for mailbox_permission');
+          onStep?.(`Calling CIPP ExecEditMailboxPermissions for ${entities.target_user_email}...`);
           response = await this.request(
             '/api/ExecEditMailboxPermissions',
             { TenantFilter: tenantFilter },
             { userId: entities.target_user_email },
           );
+          onStep?.(`Mailbox permissions updated for ${entities.target_user_email}`);
           break;
         }
 
@@ -244,9 +270,11 @@ export class CippClient {
           throw new Error(`No CIPP handler for classification: ${action}`);
       }
 
+      onStep?.('Done — CIPP action completed successfully');
       return { ok: true, response };
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
+      onStep?.(`Failed: ${message.slice(0, 200)}`);
       return { ok: false, error: message };
     }
   }

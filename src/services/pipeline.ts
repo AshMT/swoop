@@ -101,3 +101,39 @@ export function getActivePipeline(tenantId?: string): PipelineEntry[] {
   // Newest first so a just-arrived ticket appears at the top.
   return out.sort((a, b) => b.startedAt - a.startedAt);
 }
+
+// ─── Execution feed ───────────────────────────────────────────────────────────
+// Per-action-log step messages emitted during CIPP execution.
+// In-memory; expires 10 minutes after the last step.
+
+export interface FeedStep {
+  ts: number;
+  message: string;
+}
+
+const execFeeds = new Map<string, { steps: FeedStep[]; timer: ReturnType<typeof setTimeout> | null }>();
+
+const FEED_TTL_MS = 10 * 60_000;
+
+function armFeedExpiry(actionLogId: string): void {
+  const entry = execFeeds.get(actionLogId);
+  if (!entry) return;
+  if (entry.timer) clearTimeout(entry.timer);
+  const t = setTimeout(() => execFeeds.delete(actionLogId), FEED_TTL_MS);
+  if (typeof t.unref === 'function') t.unref();
+  entry.timer = t;
+}
+
+export function addExecStep(actionLogId: string, message: string): void {
+  let entry = execFeeds.get(actionLogId);
+  if (!entry) {
+    entry = { steps: [], timer: null };
+    execFeeds.set(actionLogId, entry);
+  }
+  entry.steps.push({ ts: Date.now(), message });
+  armFeedExpiry(actionLogId);
+}
+
+export function getExecFeed(actionLogId: string): FeedStep[] {
+  return execFeeds.get(actionLogId)?.steps || [];
+}
