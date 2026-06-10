@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { getTenants, testSuperOps, testAi, testCipp, type Tenant } from '../api';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { getTenants, testSuperOps, testAi, testCipp, getIntegrationStatus, type Tenant, type IntegrationCheck } from '../api';
 import api from '../api';
 
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
@@ -33,17 +34,26 @@ function StatusChip({ status }: { status: ChipStatus }) {
   );
 }
 
-function deriveStatus(hasSaved: boolean, test: TestResult): ChipStatus {
+// Combines a fresh manual test, the live polled health check, and the saved-config
+// heuristic (used only until the first live result arrives) into a single chip status.
+function deriveStatus(hasSaved: boolean, test: TestResult, live?: IntegrationCheck): ChipStatus {
   if (test?.ok === true) return 'connected';
   if (test?.ok === false) return 'error';
+  if (live) {
+    if (!live.configured) return 'not-configured';
+    return live.ok ? 'connected' : 'error';
+  }
   if (hasSaved) return 'configured';
   return 'not-configured';
 }
 
 export default function Settings() {
+  const queryClient = useQueryClient();
   const [tenant, setTenant] = useState<Tenant | null>(null);
   const [loading, setLoading] = useState(true);
   const [showCippGuide, setShowCippGuide] = useState(false);
+
+  const refreshLiveStatus = () => queryClient.invalidateQueries({ queryKey: ['integration-status'] });
 
   // SuperOps fields
   const [subdomain, setSubdomain] = useState('');
@@ -90,12 +100,21 @@ export default function Settings() {
       .finally(() => setLoading(false));
   }, []);
 
-  // Derived statuses
-  const superopsStatus = deriveStatus(!!tenant?.superopsSubdomain, superopsTest);
-  const aiStatus = deriveStatus(!!(tenant?.aiBaseUrl && tenant?.aiModel), aiTest);
+  // Live health poll — re-checks every saved integration on an interval so chips stay current.
+  const { data: liveStatus, dataUpdatedAt } = useQuery({
+    queryKey: ['integration-status', tenant?.id],
+    queryFn: () => getIntegrationStatus(tenant!.id).then((r) => r.data),
+    enabled: !!tenant?.id,
+    refetchInterval: 30_000,
+  });
+
+  // Derived statuses — a fresh manual test wins, otherwise the live poll drives the chip.
+  const superopsStatus = deriveStatus(!!tenant?.superopsSubdomain, superopsTest, liveStatus?.superops);
+  const aiStatus = deriveStatus(!!(tenant?.aiBaseUrl && tenant?.aiModel), aiTest, liveStatus?.ai);
   const cippStatus = deriveStatus(
     !!(tenant?.cippBaseUrl && tenant?.cippClientId && tenant?.cippOauthTenantId),
     cippTest,
+    liveStatus?.cipp,
   );
 
   const handleSubdomainChange = (val: string) => {
@@ -129,6 +148,7 @@ export default function Settings() {
       setSuperopsSave('saved');
       setTenant({ ...tenant, superopsSubdomain: subdomain.trim(), superopsRegion });
       setSuperopsKey('');
+      refreshLiveStatus();
       setTimeout(() => setSuperopsSave('idle'), 2500);
     } catch {
       setSuperopsSave('error');
@@ -164,6 +184,7 @@ export default function Settings() {
       setAiSave('saved');
       setTenant({ ...tenant, aiBaseUrl: aiBaseUrl.trim() || null, aiModel: aiModel.trim() || null });
       setAiApiKey('');
+      refreshLiveStatus();
       setTimeout(() => setAiSave('idle'), 2500);
     } catch {
       setAiSave('error');
@@ -208,6 +229,7 @@ export default function Settings() {
         cippApiScope: cippApiScope.trim() || null,
       });
       setCippClientSecret('');
+      refreshLiveStatus();
       setTimeout(() => setCippSave('idle'), 2500);
     } catch {
       setCippSave('error');
@@ -225,7 +247,18 @@ export default function Settings() {
 
       {/* Integration status overview */}
       <div className="sticker p-4 mb-8">
-        <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-3">Integration Status</p>
+        <div className="flex items-center justify-between mb-3">
+          <p className="text-xs font-medium text-gray-500 uppercase tracking-wider">Integration Status</p>
+          {liveStatus && (
+            <span className="inline-flex items-center gap-1.5 text-[11px] text-gray-400">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
+              </span>
+              Live · checked {new Date(dataUpdatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+            </span>
+          )}
+        </div>
         <div className="grid grid-cols-3 gap-3">
           {(
             [

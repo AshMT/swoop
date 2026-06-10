@@ -6,6 +6,7 @@ import { requireAuth } from '../../middleware/auth';
 import { encrypt, decrypt } from '../../services/crypto';
 import { SuperOpsClient } from '../../services/psa/superops';
 import { CippClient } from '../../services/cipp';
+import { testAiConnection } from '../../services/ai';
 import { z } from 'zod';
 
 const router = Router();
@@ -99,6 +100,62 @@ router.post('/:id/test-connection', async (req, res) => {
   const client = new SuperOpsClient(tenant.superopsSubdomain, apiKey, tenant.superopsRegion || 'us');
   const result = await client.testConnection();
   res.json(result);
+});
+
+// Live health check — re-tests every configured integration against stored config.
+// The Settings page polls this on an interval so status chips stay current.
+type Check = { configured: boolean; ok: boolean; error: string | null };
+
+router.get('/:id/status', async (req, res) => {
+  const [tenant] = await db.select().from(tenants).where(eq(tenants.id, req.params.id)).limit(1);
+  if (!tenant) {
+    res.status(404).json({ error: 'Tenant not found' });
+    return;
+  }
+
+  const dec = (v: string | null) => (v && ENCRYPTION_KEY ? decrypt(v, ENCRYPTION_KEY) : v || '');
+  const notConfigured: Check = { configured: false, ok: false, error: null };
+
+  const superopsConfigured = !!(tenant.superopsSubdomain && tenant.superopsApiKey);
+  const aiConfigured = !!(tenant.aiBaseUrl && tenant.aiModel);
+  const cippConfigured = !!(
+    tenant.cippBaseUrl && tenant.cippClientId && tenant.cippClientSecret && tenant.cippOauthTenantId
+  );
+
+  const checkSuperops = async (): Promise<Check> => {
+    if (!superopsConfigured) return notConfigured;
+    const client = new SuperOpsClient(tenant.superopsSubdomain, dec(tenant.superopsApiKey), tenant.superopsRegion || 'us');
+    const r = await client.testConnection();
+    return { configured: true, ok: r.ok, error: r.error ?? null };
+  };
+
+  const checkAi = async (): Promise<Check> => {
+    if (!aiConfigured) return notConfigured;
+    const ok = await testAiConnection(tenant.aiBaseUrl!, dec(tenant.aiApiKey), tenant.aiModel!);
+    return { configured: true, ok, error: ok ? null : 'Model did not respond' };
+  };
+
+  const checkCipp = async (): Promise<Check> => {
+    if (!cippConfigured) return notConfigured;
+    const cipp = new CippClient(tenant.cippBaseUrl!, tenant.cippClientId!, dec(tenant.cippClientSecret), tenant.cippOauthTenantId!, tenant.cippApiScope);
+    const r = await cipp.testConnection();
+    return { configured: true, ok: r.ok, error: r.error ?? null };
+  };
+
+  const guard = (p: Promise<Check>, configured: boolean): Promise<Check> =>
+    p.catch((e: unknown) => ({
+      configured,
+      ok: false,
+      error: (e instanceof Error ? e.message : String(e)) || 'Check failed',
+    }));
+
+  const [superops, ai, cipp] = await Promise.all([
+    guard(checkSuperops(), superopsConfigured),
+    guard(checkAi(), aiConfigured),
+    guard(checkCipp(), cippConfigured),
+  ]);
+
+  res.json({ superops, ai, cipp, checkedAt: Date.now() });
 });
 
 router.post('/:id/test-cipp', async (req, res) => {

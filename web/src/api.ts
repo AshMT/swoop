@@ -68,6 +68,9 @@ export const updateTenant = (id: string, data: {
 export const testCipp = (tenantId: string) =>
   api.post<{ ok: boolean; error?: string }>(`/tenants/${tenantId}/test-cipp`);
 
+export const getIntegrationStatus = (tenantId: string) =>
+  api.get<IntegrationStatus>(`/tenants/${tenantId}/status`);
+
 // ─── Clients ──────────────────────────────────────────────────────────────────
 export const getClients = (tenantId?: string) =>
   api.get<Client[]>('/clients', { params: tenantId ? { tenantId } : undefined });
@@ -129,6 +132,19 @@ export interface Tenant {
   autoConfidenceMin: number | null;
   lastPolledAt: number | null;
   createdAt: number | null;
+}
+
+export interface IntegrationCheck {
+  configured: boolean;
+  ok: boolean;
+  error: string | null;
+}
+
+export interface IntegrationStatus {
+  superops: IntegrationCheck;
+  ai: IntegrationCheck;
+  cipp: IntegrationCheck;
+  checkedAt: number;
 }
 
 export type PolicyPermission = 'approval' | 'auto' | 'disabled';
