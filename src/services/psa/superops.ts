@@ -49,26 +49,34 @@ const GET_TICKETS_QUERY = `
 `;
 
 // Conversation thread for a single ticket — used to detect customer replies
-// when an action is waiting on more information.
+// when an action is waiting on more information. Per the SuperOps MSP schema,
+// getTicketConversationList takes a TicketIdentifierInput and returns the list
+// directly (no pagination wrapper); each entry's `type` says who authored it.
 const GET_CONVERSATIONS_QUERY = `
-  query GetTicketConversationList($input: ListInfoInput!, $ticketId: ID!) {
-    getTicketConversationList(input: $input, ticketId: $ticketId) {
-      conversations {
-        conversationId
-        content
-        type
-        createdTime
-        user
-      }
-      listInfo {
-        totalCount
-      }
+  query GetTicketConversationList($input: TicketIdentifierInput!) {
+    getTicketConversationList(input: $input) {
+      conversationId
+      content
+      time
+      type
+      user
+    }
+  }
+`;
+
+// Customer-facing reply. sendMail:true emails the requester so they actually
+// receive the question and their answer comes back as a REQ_REPLY conversation.
+const CREATE_CONVERSATION_MUTATION = `
+  mutation CreateTicketConversation($input: CreateTicketConversationInput!) {
+    createTicketConversation(input: $input) {
+      conversationId
+      type
     }
   }
 `;
 
 // Introspect conversation-related queries so logs reveal the real field names
-// if our best-guess query shape is rejected.
+// if our query shape is ever rejected (schema drift).
 const INTROSPECT_QUERIES = `
   query IntrospectQueries {
     __schema {
@@ -92,10 +100,22 @@ const ADD_NOTE_MUTATION = `
   }
 `;
 
-// Introspect CreateTicketNoteInput to discover real field names (logged once at startup)
+// Introspect CreateTicketNoteInput / CreateTicketConversationInput to discover
+// real field names (logged once at startup).
 const INTROSPECT_NOTE_INPUT = `
   query IntrospectNoteInput {
     __type(name: "CreateTicketNoteInput") {
+      inputFields {
+        name
+        type { name kind ofType { name kind } }
+      }
+    }
+  }
+`;
+
+const INTROSPECT_CONVERSATION_INPUT = `
+  query IntrospectConversationInput {
+    __type(name: "CreateTicketConversationInput") {
       inputFields {
         name
         type { name kind ofType { name kind } }
@@ -196,25 +216,20 @@ export class SuperOpsClient implements PSAClient {
   }
 
   /**
-   * Fetch the conversation thread for a ticket (replies + notes), oldest first.
-   * Returns [] if the API doesn't support the query shape — logged once with
-   * schema introspection output so the real field names can be identified.
+   * Fetch the conversation thread for a ticket. Returns the entries directly
+   * (the schema returns a bare list, not a paginated wrapper). Returns [] if the
+   * API rejects the query shape — logged once with introspection of the real
+   * field names so it can be corrected.
    */
   async getTicketConversations(ticketId: string): Promise<TicketConversation[]> {
     if (conversationsSupported === false) return [];
-    type ConvResult = {
-      getTicketConversationList: {
-        conversations: TicketConversation[];
-        listInfo: { totalCount: number };
-      };
-    };
+    type ConvResult = { getTicketConversationList: TicketConversation[] };
     try {
       const data = await this.client.request<ConvResult>(GET_CONVERSATIONS_QUERY, {
-        input: { page: 1, pageSize: 100 },
-        ticketId,
+        input: { ticketId },
       });
       conversationsSupported = true;
-      return data.getTicketConversationList?.conversations || [];
+      return data.getTicketConversationList || [];
     } catch (err) {
       if (conversationsSupported === null) {
         conversationsSupported = false;
@@ -223,6 +238,49 @@ export class SuperOpsClient implements PSAClient {
         void this.logConversationQueryShapes();
       }
       return [];
+    }
+  }
+
+  /**
+   * Post a customer-facing reply on the ticket (emails the requester when
+   * sendMail is true). Their answer returns as a REQ_REPLY conversation.
+   */
+  async addTicketReply(ticketId: string, content: string, sendMail = true): Promise<void> {
+    await this.client.request(CREATE_CONVERSATION_MUTATION, {
+      input: {
+        ticket: { ticketId },
+        content,
+        sendMail,
+      },
+    });
+  }
+
+  /**
+   * Send a message the customer should see. Prefers a real reply (emails the
+   * requester); falls back to a PUBLIC note when there's no requester to email
+   * or the reply call fails. Returns which channel was used.
+   */
+  async sendCustomerMessage(
+    ticketId: string,
+    content: string,
+    hasRequester: boolean,
+  ): Promise<'reply' | 'public_note' | 'failed'> {
+    if (hasRequester) {
+      try {
+        await this.addTicketReply(ticketId, content, true);
+        return 'reply';
+      } catch (err) {
+        console.error(`[SuperOps] Reply failed for ticket ${ticketId}, falling back to public note:`,
+          err instanceof Error ? err.message : err);
+      }
+    }
+    try {
+      await this.addTicketNote(ticketId, content, false); // PUBLIC note
+      return 'public_note';
+    } catch (err) {
+      console.error(`[SuperOps] Public note failed for ticket ${ticketId}:`,
+        err instanceof Error ? err.message : err);
+      return 'failed';
     }
   }
 
@@ -248,14 +306,26 @@ export class SuperOpsClient implements PSAClient {
   }
 
   async logNoteInputFields(): Promise<void> {
+    await this.logInputFields('CreateTicketNoteInput', INTROSPECT_NOTE_INPUT);
+  }
+
+  async logConversationInputFields(): Promise<void> {
+    await this.logInputFields('CreateTicketConversationInput', INTROSPECT_CONVERSATION_INPUT);
+  }
+
+  private async logInputFields(typeName: string, query: string): Promise<void> {
     try {
       type FieldInfo = { name: string; type: { name: string | null; kind: string; ofType: { name: string | null; kind: string } | null } };
-      const data = await this.client.request<{ __type: { inputFields: FieldInfo[] } }>(INTROSPECT_NOTE_INPUT);
-      const fields = (data.__type?.inputFields || []).map((f) => {
+      const data = await this.client.request<{ __type: { inputFields: FieldInfo[] } | null }>(query);
+      if (!data.__type) {
+        console.log(`[SuperOps] ${typeName} not found in schema`);
+        return;
+      }
+      const fields = (data.__type.inputFields || []).map((f) => {
         const t = f.type.ofType ?? f.type;
         return `${f.name}: ${t.name ?? f.type.kind}`;
       });
-      console.log('[SuperOps] CreateTicketNoteInput fields:', fields.join(', '));
+      console.log(`[SuperOps] ${typeName} fields:`, fields.join(', '));
     } catch {
       // non-critical
     }

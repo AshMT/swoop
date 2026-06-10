@@ -22,6 +22,11 @@ After this, anyone can `docker pull ghcr.io/ashmt/swoop:latest` without logging 
 ---
 
 ### 2. Verify SuperOps GraphQL field names
+**Update 2026-06-10:** field names + the notes/conversations model are now verified
+against the live MSP schema (developer.superops.com/msp) — see "Communication
+model & approvals" below. The one remaining runtime check is recipient routing on
+`createTicketConversation` (flagged there). Original notes retained below.
+
 The queries in `src/services/psa/superops.ts` use estimated field names. They **will almost certainly fail** against the real SuperOps API. This is the #1 thing to fix before running Swoop against a real SuperOps instance.
 
 **Steps:**
@@ -90,6 +95,41 @@ SWOOP_IMAGE=ghcr.io/ashmt/swoop:latest docker compose -f docker-compose.simple.y
 
 ### To trigger a new build manually
 Go to: https://github.com/AshMT/swoop/actions → **Build & Push Docker Image** → **Run workflow**
+
+---
+
+## Communication model & approvals (verified against SuperOps schema 2026-06-10)
+
+SuperOps models ticket communication as **two separate channels** (confirmed
+against the live MSP GraphQL schema at developer.superops.com/msp):
+
+| Channel | Mutation | Read query | Customer-facing? |
+|---|---|---|---|
+| **Conversation** (reply) | `createTicketConversation` (`sendMail:true`) | `getTicketConversationList` → `[TicketConversation]` | **Yes** — emails the requester; their answer returns as `type: REQ_REPLY` |
+| **Note** | `createTicketNote` (`privacyType`) | `getTicketNoteList` | Internal by default; `PUBLIC` shows in portal. Notes are always technician-authored — a client cannot reply via notes. |
+
+**Swoop's rule:** customer-facing messages (questions, completion confirmations)
+go out as a **reply** (`sendCustomerMessage`), falling back to a `PUBLIC` note
+only when the ticket has no requester to email. Internal analysis + escalation
+notes stay `PRIVATE`. Customer replies are detected by `type === 'REQ_REPLY'`
+(the canonical author signal) — never by parsing text.
+
+- [ ] **VERIFY recipient routing** — `createTicketConversation` is sent with
+  `sendMail:true` and no explicit `toUsers`, relying on SuperOps to route the
+  reply to the ticket's requester. Confirm the first real question actually
+  reaches the customer's inbox. If not, add `toUsers:[requester]` — the input
+  shape is logged at startup (`[SuperOps] CreateTicketConversationInput fields:`).
+
+### Future feature — native approvals
+SuperOps's built-in **ticket approval process** (approver role, approve/reject/
+request-info chain) is **not exposed in the MSP GraphQL API** — it's UI-only and
+appears to be SuperOps-for-IT edition. Rallied doesn't use the PSA's native
+approval either; it runs its own approval engine and just notifies via a ticket
+note. So Swoop's in-app approval queue is the right model for now.
+- [ ] **Manager Approval (dual approval)** — Rallied-style: for authorization-
+  heavy actions (e.g. grant admin rights), resolve the requester's direct
+  manager from M365/Entra (via CIPP) and require BOTH a tech and that manager to
+  approve. Add 24h expiry + single-use + plan-binding guardrails.
 
 ---
 

@@ -50,6 +50,15 @@ function extractRequesterEmail(requester: SuperOpsTicket['requester']): string {
   return requester.email || requester.emailId || '';
 }
 
+// Whether the ticket has a requester we can reply to. A SuperOps requester is a
+// JSON object that may carry name/userId without an email — and sendMail routes
+// to them regardless — so presence (not just email) is what we check.
+function ticketHasRequester(requester: SuperOpsTicket['requester']): boolean {
+  if (!requester) return false;
+  if (typeof requester === 'string') return requester.trim().length > 0;
+  return !!(requester.email || requester.emailId || requester.name);
+}
+
 async function runAllTenants(): Promise<void> {
   if (pollerRunning) {
     console.log('[Poller] Previous cycle still running — skipping this tick');
@@ -94,6 +103,7 @@ async function pollTenant(tenant: Tenant): Promise<void> {
   if (!noteFieldsLogged) {
     noteFieldsLogged = true;
     void superops.logNoteInputFields();
+    void superops.logConversationInputFields();
   }
 
   let tickets: SuperOpsTicket[];
@@ -204,6 +214,8 @@ async function processTicket(
   trackStage(ticketId, 'deciding');
   const policy = isActionable ? await getPolicy(tenant.id, cls) : null;
 
+  const hasRequester = ticketHasRequester(ticket.requester);
+
   let status: string;
   let reasoning = classification.reasoning;
   let customerQuestion: string | null = null;
@@ -211,18 +223,19 @@ async function processTicket(
   let askAttempts = 0;
 
   if (cls === 'FOLLOW_UP' && classification.follow_up_question) {
-    // Information gathering: ask the customer directly on the ticket (PUBLIC reply)
+    // Information gathering: ask the customer via a real reply (emails the
+    // requester) so their answer comes back as a REQ_REPLY. Falls back to a
+    // public note only when there's no requester to email.
     customerQuestion = classification.follow_up_question;
-    const publicAsk = formatCustomerQuestion(customerQuestion, tenant.name);
-    try {
-      await superops.addTicketNote(ticketId, publicAsk, false);
+    const ask = formatCustomerQuestion(customerQuestion, tenant.name);
+    const channel = await superops.sendCustomerMessage(ticketId, ask, hasRequester);
+    if (channel !== 'failed') {
       questionPostedAt = Math.floor(Date.now() / 1000);
       askAttempts = 1;
       status = 'waiting_on_customer';
-      console.log(`[Poller] Ticket ${ticketId}: asked customer — "${customerQuestion}"`);
-    } catch (err) {
-      console.error(`[Poller] Failed to post public question to ticket ${ticketId}:`, err);
-      status = 'follow_up'; // question couldn't be posted — leave for a human
+      console.log(`[Poller] Ticket ${ticketId}: asked customer via ${channel} — "${customerQuestion}"`);
+    } else {
+      status = 'follow_up'; // couldn't reach the customer — leave for a human
     }
   } else if (cls === 'ESCALATE' || cls === 'FOLLOW_UP') {
     status = 'escalated';
@@ -294,10 +307,9 @@ async function processTicket(
         const [after] = await db.select().from(actionLogs).where(eq(actionLogs.id, actionLogId)).limit(1);
         finalOutcome = after?.status ?? status;
         if (after?.status === 'executed') {
-          // Tell the customer it's done (public), keep the technical record internal
-          try {
-            await superops.addTicketNote(ticketId, formatCompletionNote(classification, tenant.name), false);
-          } catch { /* note is best-effort */ }
+          // Tell the customer it's done (reply, emails the requester), keep the
+          // technical record as an internal note.
+          await superops.sendCustomerMessage(ticketId, formatCompletionNote(classification, tenant.name), hasRequester);
           try {
             await superops.addTicketNote(ticketId, `🤖 **Swoop AI Agent** — pre-approved action auto-executed per policy: ✅ executed successfully`, true);
           } catch { /* note is best-effort */ }
@@ -334,6 +346,15 @@ function stripHtml(s: string): string {
   return s.replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
+// Conversation `time` is an ISO string; parse defensively (fall back to epoch).
+function parseConvTime(t: string | null | undefined): number {
+  if (!t) return 0;
+  const ms = new Date(t).getTime();
+  if (!Number.isNaN(ms)) return ms;
+  const n = Number(t);
+  return Number.isNaN(n) ? 0 : n;
+}
+
 async function checkWaitingReplies(tenant: Tenant, superops: SuperOpsClient): Promise<void> {
   const waiting = await db
     .select()
@@ -347,20 +368,18 @@ async function checkWaitingReplies(tenant: Tenant, superops: SuperOpsClient): Pr
     const conversations = await superops.getTicketConversations(log.ticketId);
     if (conversations.length === 0) continue; // none yet, or query unsupported
 
+    // Only genuine requester replies posted AFTER we asked. The `type` enum is
+    // the canonical author signal — REQ_REPLY is the customer; our own replies
+    // are TECH_REPLY, so we can never mistake them for the customer's.
     const askedAt = (log.questionPostedAt ?? 0) * 1000;
-    const newReplies = conversations.filter((c) => {
-      const ts = c.createdTime ? new Date(c.createdTime).getTime() : 0;
-      if (ts <= askedAt) return false;
-      const content = stripHtml(c.content || '');
-      if (!content) return false;
-      // Skip our own notes — they all carry the Swoop signature
-      if (/swoop/i.test(content) && /ai agent|support team/i.test(content)) return false;
-      return true;
-    });
+    const newReplies = conversations
+      .filter((c) => c.type === 'REQ_REPLY' && parseConvTime(c.time) > askedAt)
+      .map((c) => stripHtml(c.content || ''))
+      .filter(Boolean);
 
     if (newReplies.length === 0) continue;
 
-    const replyText = newReplies.map((c) => stripHtml(c.content || '')).join('\n');
+    const replyText = newReplies.join('\n');
     console.log(`[Poller] Ticket ${log.ticketId}: customer replied — re-classifying`);
 
     await processCustomerReply(log.id, replyText, tenant, superops);
@@ -428,15 +447,19 @@ export async function processCustomerReply(
   if (isActionable && policy?.permission !== 'disabled') {
     status = 'awaiting_approval';
   } else if (cls === 'FOLLOW_UP' && classification.follow_up_question && attempts < MAX_ASK_ATTEMPTS && superops) {
-    // Still missing something — ask once more, then stop bothering the customer
+    // Still missing something — ask once more (via reply), then stop bothering the customer
     customerQuestion = classification.follow_up_question;
-    try {
-      await superops.addTicketNote(log.ticketId, formatCustomerQuestion(customerQuestion, tenant.name), false);
+    const channel = await superops.sendCustomerMessage(
+      log.ticketId,
+      formatCustomerQuestion(customerQuestion, tenant.name),
+      !!log.requesterEmail,
+    );
+    if (channel !== 'failed') {
       questionPostedAt = Math.floor(Date.now() / 1000);
       askAttempts = attempts + 1;
       status = 'waiting_on_customer';
-      console.log(`[Poller] Ticket ${log.ticketId}: asked customer again (attempt ${askAttempts})`);
-    } catch {
+      console.log(`[Poller] Ticket ${log.ticketId}: asked customer again via ${channel} (attempt ${askAttempts})`);
+    } else {
       status = 'escalated';
     }
   } else {

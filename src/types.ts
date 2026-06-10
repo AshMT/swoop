@@ -91,13 +91,22 @@ export interface SuperOpsTicket {
   requester?: string | { email?: string; name?: string; emailId?: string };
 }
 
+// Each entry in a ticket's conversation thread carries a type that tells us who
+// authored it — this is the canonical author signal (more reliable than parsing
+// the user/content). REQ_* = requester (customer) side, TECH_* = technician side.
+export type TicketConversationType =
+  | 'DESCRIPTION'        // the original ticket body (first message)
+  | 'REQ_REPLY'          // a reply FROM the requester (customer) ← what we watch for
+  | 'REQ_NOTIFICATION'   // a notification sent TO the requester
+  | 'TECH_REPLY'         // a reply from a technician (incl. Swoop's own replies)
+  | 'TECH_NOTIFICATION'; // a technician-side notification
+
 export interface TicketConversation {
   conversationId: string;
-  content: string;
-  createdTime: string;
-  // PUBLIC_REPLY/PRIVATE_NOTE-style type, plus who wrote it (shape varies by API version)
-  type?: string | null;
-  user?: string | { name?: string; email?: string } | null;
+  content: string | null;
+  time: string; // created datetime (ISO string)
+  type: TicketConversationType | null;
+  user?: unknown; // JSON: { userId, name, email } — or { email } only for external senders
 }
 
 export interface AiClassification {

@@ -103,9 +103,9 @@ export async function executeAction(
     if (missing) {
       const question = MISSING_ENTITY_QUESTIONS[missing] || `Could you provide the ${missing.replace(/_/g, ' ')}?`;
       step(`Missing information: ${missing} — asking the customer on the ticket`);
-      const asked = await askCustomerOnTicket(tenant, actionLog.ticketId, question);
-      if (asked) {
-        step(`Question posted to ticket #${actionLog.ticketId} — waiting on customer reply`);
+      const channel = await askCustomerOnTicket(tenant, actionLog.ticketId, question, !!actionLog.requesterEmail);
+      if (channel !== 'failed') {
+        step(`Question posted to ticket #${actionLog.ticketId} via ${channel} — waiting on customer reply`);
         await db.update(actionLogs).set({
           status: 'waiting_on_customer',
           customerQuestion: question,
@@ -142,14 +142,14 @@ async function askCustomerOnTicket(
   tenant: { superopsSubdomain: string; superopsApiKey: string; superopsRegion: string | null; name: string },
   ticketId: string,
   question: string,
-): Promise<boolean> {
+  hasRequester: boolean,
+): Promise<'reply' | 'public_note' | 'failed'> {
   try {
     const apiKey = ENCRYPTION_KEY ? decrypt(tenant.superopsApiKey, ENCRYPTION_KEY) : tenant.superopsApiKey;
     const superops = new SuperOpsClient(tenant.superopsSubdomain, apiKey, tenant.superopsRegion || 'us');
-    await superops.addTicketNote(ticketId, formatCustomerQuestion(question, tenant.name), false);
-    return true;
+    return await superops.sendCustomerMessage(ticketId, formatCustomerQuestion(question, tenant.name), hasRequester);
   } catch (err) {
     console.error(`[Executor] Failed to ask customer on ticket ${ticketId}:`, err);
-    return false;
+    return 'failed';
   }
 }
