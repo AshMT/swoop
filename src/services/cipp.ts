@@ -22,6 +22,17 @@ export function normalizeScope(raw?: string | null): string | null {
   return `api://${v}/.default`;
 }
 
+/** Decode a JWT's payload WITHOUT verifying the signature — diagnostics only. */
+function decodeJwtPayload(token: string): Record<string, unknown> | null {
+  try {
+    const payload = token.split('.')[1];
+    if (!payload) return null;
+    return JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
 export class CippClient {
   private baseUrl: string;
   private clientId: string;
@@ -40,11 +51,11 @@ export class CippClient {
    *   to `api://<clientId>/.default` for backward compatibility.
    */
   constructor(baseUrl: string, clientId: string, clientSecret: string, tenantId: string, apiScope?: string | null) {
-    this.baseUrl = baseUrl.replace(/\/$/, '');
-    this.clientId = clientId;
-    this.clientSecret = clientSecret;
-    this.tenantId = tenantId;
-    this.scope = normalizeScope(apiScope) || `api://${clientId}/.default`;
+    this.baseUrl = baseUrl.trim().replace(/\/$/, '');
+    this.clientId = clientId.trim();
+    this.clientSecret = clientSecret.trim();
+    this.tenantId = tenantId.trim();
+    this.scope = normalizeScope(apiScope) || `api://${this.clientId}/.default`;
   }
 
   private async getToken(): Promise<string> {
@@ -94,7 +105,27 @@ export class CippClient {
     });
     if (!res.ok) {
       let detail = res.statusText;
-      try { detail = await res.text(); } catch { /* ignore */ }
+      try { detail = (await res.text()).slice(0, 500); } catch { /* ignore */ }
+
+      // EasyAuth rejection: Azure AD issued the token, but the Function App's auth
+      // layer refused it before it ever reached CIPP code. Decode the token so the
+      // error shows exactly what was presented, plus how to fix the Function App.
+      if (res.status === 401 || res.status === 403) {
+        const claims = decodeJwtPayload(token) || {};
+        const aud = String(claims.aud ?? 'unknown');
+        const appid = String(claims.appid ?? claims.azp ?? 'unknown');
+        const roles = Array.isArray(claims.roles) ? claims.roles.join(',') : 'none';
+        throw new Error(
+          `CIPP's Function App rejected the token (HTTP ${res.status}) before it reached CIPP. ` +
+          `Token presented — audience: ${aud}, client app: ${appid}, roles: [${roles}]. ` +
+          `This means the Function App's Authentication is not configured to accept this API client. ` +
+          `Fix: the Function App needs a Microsoft identity provider with allowed token audience "${aud}" ` +
+          `(CIPP normally adds this when the API client is created — re-save/recreate the client in CIPP, ` +
+          `or add the provider manually in Azure Portal → Function App → Authentication, then restart it). ` +
+          `Raw response: ${detail}`,
+        );
+      }
+
       throw new Error(`CIPP API error: HTTP ${res.status} — ${detail}`);
     }
     return res.json();

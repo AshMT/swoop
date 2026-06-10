@@ -502,13 +502,12 @@ export default function Settings() {
               type="text"
               value={cippApiScope}
               onChange={(e) => { setCippApiScope(e.target.value); setCippTest(null); }}
-              placeholder="api://36b5f3c3-f5a0-4a3c-88b9-4402e069c7da/.default"
+              placeholder="api://<guid from Copy API Scope>/.default"
               className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-swoop-500"
             />
             <p className="text-xs text-gray-400 mt-1">
-              From CIPP → the swoop client's <strong>⋯ → Copy API Scope</strong>. This is the <em>resource</em> the token
-              is requested for — usually a <strong>different</strong> GUID than the Client ID. Leave blank to default to
-              <code> api://&lt;Client ID&gt;/.default</code>.
+              Paste the <em>exact</em> value from CIPP → the swoop client's <strong>⋯ → Copy API Scope</strong>.
+              Leave blank to default to <code>api://&lt;Client ID&gt;/.default</code>.
             </p>
           </div>
 
