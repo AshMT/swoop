@@ -7,6 +7,15 @@ import {
   type PipelineEntry, type PipelineStage,
 } from '../api';
 
+// Extract the real error message from an Axios error — falls back to the generic message.
+function apiError(err: unknown): string {
+  if (err && typeof err === 'object' && 'response' in err) {
+    const data = (err as { response?: { data?: { error?: string } } }).response?.data;
+    if (data?.error) return data.error;
+  }
+  return (err as Error)?.message || 'Unknown error';
+}
+
 const VERIFICATION_METHODS = [
   { value: 'phone_callback', label: 'Phone callback to known number' },
   { value: 'video_call', label: 'Video call / Teams' },
@@ -358,9 +367,7 @@ function ActionRow({ log, client, policy }: { log: ActionLog; client?: Client; p
                     </span>
                   </div>
                   {retryMutation.isError && (
-                    <p className="text-red-600 text-xs mt-2">
-                      {(retryMutation.error as Error)?.message || 'Retry failed'}
-                    </p>
+                    <p className="text-red-600 text-xs mt-2">{apiError(retryMutation.error)}</p>
                   )}
                 </div>
               )}
@@ -461,9 +468,7 @@ function ActionRow({ log, client, policy }: { log: ActionLog; client?: Client; p
                     </div>
                   )}
                   {approveMutation.isError && (
-                    <p className="text-red-600 text-xs mt-2">
-                      {(approveMutation.error as Error)?.message || 'Failed to execute action'}
-                    </p>
+                    <p className="text-red-600 text-xs mt-2">{apiError(approveMutation.error)}</p>
                   )}
                 </div>
               )}

@@ -36,7 +36,7 @@ export async function executeAction(
 
   const [client] = await db.select().from(clients).where(eq(clients.id, actionLog.clientId!)).limit(1);
   if (!client) throw new Error('Client not found');
-  if (!client.cippTenantId) throw new Error('Client has no CIPP tenant ID configured');
+  if (!client.cippTenantId) throw new Error(`Client "${client.name}" has no CIPP Tenant ID — edit the client in the Clients page and set its CIPP Tenant ID (e.g. contoso.onmicrosoft.com)`);
 
   // Mark approved before executing
   const now = Math.floor(Date.now() / 1000);
