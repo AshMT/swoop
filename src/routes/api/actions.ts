@@ -4,6 +4,7 @@ import { actionLogs, executionLogs } from '../../db/schema';
 import { eq, desc, and } from 'drizzle-orm';
 import { requireAuth, type AuthRequest } from '../../middleware/auth';
 import { executeAction } from '../../services/executor';
+import { getPolicy } from '../../services/policies';
 
 const router = Router();
 
@@ -49,6 +50,9 @@ router.get('/', async (req, res) => {
       approvedBy: actionLogs.approvedBy,
       approvedAt: actionLogs.approvedAt,
       rejectionReason: actionLogs.rejectionReason,
+      verificationMethod: actionLogs.verificationMethod,
+      verifiedBy: actionLogs.verifiedBy,
+      verifiedAt: actionLogs.verifiedAt,
       createdAt: actionLogs.createdAt,
     })
     .from(actionLogs)
@@ -102,9 +106,27 @@ router.get('/:id', async (req, res) => {
 router.post('/:id/approve', async (req: AuthRequest, res) => {
   const { id } = req.params;
   const approvedBy = req.user?.email ?? 'unknown';
+  const { verificationMethod } = req.body as { verificationMethod?: string };
 
   try {
-    await executeAction(id, approvedBy);
+    // Enforce the action's policy: verification must be recorded when required
+    const [log] = await db.select().from(actionLogs).where(eq(actionLogs.id, id)).limit(1);
+    if (log?.tenantId && log.classification) {
+      const policy = await getPolicy(log.tenantId, log.classification);
+      if (policy?.permission === 'disabled') {
+        res.status(403).json({ error: `Action type "${log.classification}" is disabled by policy` });
+        return;
+      }
+      if (policy?.requireVerification && !verificationMethod) {
+        res.status(400).json({
+          error: 'Identity verification required: confirm how you verified the requester before approving',
+          requiresVerification: true,
+        });
+        return;
+      }
+    }
+
+    await executeAction(id, approvedBy, verificationMethod ? { method: verificationMethod } : undefined);
     const [updated] = await db.select().from(actionLogs).where(eq(actionLogs.id, id)).limit(1);
     res.json(updated);
   } catch (err: unknown) {

@@ -25,6 +25,7 @@ const SAFE_FIELDS = {
   cippClientId: tenants.cippClientId,
   cippOauthTenantId: tenants.cippOauthTenantId,
   cippApiScope: tenants.cippApiScope,
+  autoConfidenceMin: tenants.autoConfidenceMin,
   lastPolledAt: tenants.lastPolledAt,
   createdAt: tenants.createdAt,
 } as const;
@@ -56,6 +57,7 @@ const updateSchema = z.object({
   cippClientSecret: z.string().optional().nullable(),
   cippOauthTenantId: z.string().optional().nullable(),
   cippApiScope: z.string().optional().nullable(),
+  autoConfidenceMin: z.number().min(0.5).max(1).optional(),
 });
 
 router.patch('/:id', async (req, res) => {

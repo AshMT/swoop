@@ -1,9 +1,21 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  getActions, getActionStats, getClients, getTenants, approveAction, rejectAction, getExecutionLog,
-  type ActionLog, type Client, type ExecutionLog,
+  getActions, getActionStats, getClients, getTenants, getPolicies, approveAction, rejectAction, getExecutionLog,
+  type ActionLog, type ActionPolicy, type Client, type ExecutionLog,
 } from '../api';
+
+const VERIFICATION_METHODS = [
+  { value: 'phone_callback', label: 'Phone callback to known number' },
+  { value: 'video_call', label: 'Video call / Teams' },
+  { value: 'known_email_reply', label: 'Reply from known email address' },
+  { value: 'manager_confirmed', label: 'Manager confirmation in writing' },
+  { value: 'in_person', label: 'Verified in person' },
+  { value: 'other', label: 'Other' },
+];
+
+const verificationLabel = (value: string | null) =>
+  VERIFICATION_METHODS.find((m) => m.value === value)?.label || value || '';
 
 const CLASSIFICATION_COLORS: Record<string, string> = {
   password_reset: 'bg-blue-100 text-blue-700',
@@ -62,10 +74,13 @@ function ConfidenceBar({ value }: { value: number | null }) {
   );
 }
 
-function ActionRow({ log, client }: { log: ActionLog; client?: Client }) {
+function ActionRow({ log, client, policy }: { log: ActionLog; client?: Client; policy?: ActionPolicy }) {
   const [expanded, setExpanded] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
   const [showRejectForm, setShowRejectForm] = useState(false);
+  const [showVerifyForm, setShowVerifyForm] = useState(false);
+  const [verifyMethod, setVerifyMethod] = useState('phone_callback');
+  const [verifyConfirmed, setVerifyConfirmed] = useState(false);
   const queryClient = useQueryClient();
   const entities = log.entities ? (() => { try { return JSON.parse(log.entities!); } catch { return {}; } })() : {};
 
@@ -82,8 +97,8 @@ function ActionRow({ log, client }: { log: ActionLog; client?: Client }) {
   };
 
   const approveMutation = useMutation({
-    mutationFn: () => approveAction(log.id),
-    onSuccess: invalidate,
+    mutationFn: (verificationMethod?: string) => approveAction(log.id, verificationMethod),
+    onSuccess: () => { invalidate(); setShowVerifyForm(false); setVerifyConfirmed(false); },
   });
 
   const rejectMutation = useMutation({
@@ -172,17 +187,78 @@ function ActionRow({ log, client }: { log: ActionLog; client?: Client }) {
                 </div>
               )}
 
+              {/* Verification audit trail */}
+              {log.verificationMethod && (
+                <div className="md:col-span-2 text-xs text-gray-600 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
+                  🔐 Identity verified via <strong>{verificationLabel(log.verificationMethod)}</strong>
+                  {log.verifiedBy && <> by {log.verifiedBy}</>}
+                  {log.verifiedAt && <> — {new Date(log.verifiedAt * 1000).toLocaleString()}</>}
+                </div>
+              )}
+              {log.approvedBy === 'swoop:auto-policy' && (
+                <div className="md:col-span-2 text-xs text-green-800 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
+                  ⚡ Auto-approved by policy — this action type is pre-approved and passed the confidence/sensitivity guardrails.
+                </div>
+              )}
+
               {/* Approve / Reject actions */}
               {isActionable && (
                 <div className="md:col-span-2" onClick={(e) => e.stopPropagation()}>
-                  {!showRejectForm ? (
-                    <div className="flex gap-2">
+                  {showVerifyForm ? (
+                    <div className="flex flex-col gap-3 max-w-md bg-blue-50 border border-blue-200 rounded-lg p-4">
+                      <div className="text-sm font-medium text-gray-800">🔐 Identity verification required</div>
+                      <p className="text-xs text-gray-600">
+                        Policy requires verifying the requester's identity before executing <strong>{log.classification}</strong>.
+                        Record how you verified them:
+                      </p>
+                      <select
+                        value={verifyMethod}
+                        onChange={(e) => setVerifyMethod(e.target.value)}
+                        className="px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-swoop-500"
+                      >
+                        {VERIFICATION_METHODS.map((m) => (
+                          <option key={m.value} value={m.value}>{m.label}</option>
+                        ))}
+                      </select>
+                      <label className="flex items-start gap-2 cursor-pointer text-xs text-gray-700">
+                        <input
+                          type="checkbox"
+                          checked={verifyConfirmed}
+                          onChange={(e) => setVerifyConfirmed(e.target.checked)}
+                          className="w-4 h-4 mt-0.5 rounded accent-swoop-600"
+                        />
+                        <span>
+                          I have verified the identity of <strong>{log.requesterEmail || 'the requester'}</strong> using
+                          the method above. This is recorded in the audit log.
+                        </span>
+                      </label>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => approveMutation.mutate(verifyMethod)}
+                          disabled={!verifyConfirmed || approveMutation.isPending}
+                          className="px-4 py-2 bg-green-600 text-white text-sm rounded-lg hover:bg-green-700 disabled:opacity-50 font-medium"
+                        >
+                          {approveMutation.isPending ? 'Executing...' : 'Confirm & Execute'}
+                        </button>
+                        <button
+                          onClick={() => { setShowVerifyForm(false); setVerifyConfirmed(false); }}
+                          className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : !showRejectForm ? (
+                    <div className="flex gap-2 items-center">
                       <button
-                        onClick={() => approveMutation.mutate()}
+                        onClick={() => {
+                          if (policy?.requireVerification) setShowVerifyForm(true);
+                          else approveMutation.mutate(undefined);
+                        }}
                         disabled={approveMutation.isPending}
                         className="px-4 py-2 bg-green-600 text-white text-sm rounded-lg hover:bg-green-700 disabled:opacity-50 font-medium"
                       >
-                        {approveMutation.isPending ? 'Executing...' : 'Approve & Execute'}
+                        {approveMutation.isPending ? 'Executing...' : policy?.requireVerification ? 'Verify & Execute' : 'Approve & Execute'}
                       </button>
                       <button
                         onClick={() => setShowRejectForm(true)}
@@ -190,6 +266,9 @@ function ActionRow({ log, client }: { log: ActionLog; client?: Client }) {
                       >
                         Reject
                       </button>
+                      {policy?.requireVerification && (
+                        <span className="text-xs text-gray-400">🔐 Identity verification required by policy</span>
+                      )}
                     </div>
                   ) : (
                     <div className="flex flex-col gap-2 max-w-sm">
@@ -263,6 +342,12 @@ export default function Dashboard() {
     enabled: !!tenantId,
   });
 
+  const { data: policies = [] } = useQuery({
+    queryKey: ['policies', tenantId],
+    queryFn: () => getPolicies(tenantId!).then((r) => r.data),
+    enabled: !!tenantId,
+  });
+
   const { data: actions = [], isLoading } = useQuery({
     queryKey: ['actions', tenantId, filterClient, filterClassification, filterStatus],
     queryFn: () =>
@@ -279,6 +364,9 @@ export default function Dashboard() {
 
   const clientMap: Record<string, Client> = {};
   for (const c of clients) clientMap[c.id] = c;
+
+  const policyMap: Record<string, ActionPolicy> = {};
+  for (const p of policies) policyMap[p.actionType] = p;
 
   const classifications = Object.keys(stats?.byClassification || {});
   const byStatus = stats?.byStatus || {};
@@ -393,7 +481,12 @@ export default function Dashboard() {
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {actions.map((log) => (
-                  <ActionRow key={log.id} log={log} client={clientMap[log.clientId]} />
+                  <ActionRow
+                    key={log.id}
+                    log={log}
+                    client={clientMap[log.clientId]}
+                    policy={log.classification ? policyMap[log.classification] : undefined}
+                  />
                 ))}
               </tbody>
             </table>

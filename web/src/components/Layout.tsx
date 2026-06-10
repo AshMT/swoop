@@ -6,6 +6,7 @@ import { getPendingCount } from '../api';
 const NAV_ITEMS = [
   { to: '/dashboard', label: 'Dashboard' },
   { to: '/clients', label: 'Clients' },
+  { to: '/policies', label: 'Policies' },
   { to: '/settings', label: 'Settings' },
 ];
 

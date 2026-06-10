@@ -20,6 +20,7 @@ export interface Tenant {
   cippClientSecret: string | null; // encrypted at rest
   cippOauthTenantId: string | null;
   cippApiScope: string | null;
+  autoConfidenceMin: number | null;
   lastPolledAt: number | null;
   createdAt: number | null;
 }

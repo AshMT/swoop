@@ -95,6 +95,16 @@ export function initializeDatabase(): void {
       last_comment_id TEXT,
       processed_at INTEGER DEFAULT (unixepoch())
     );
+
+    CREATE TABLE IF NOT EXISTS action_policies (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT REFERENCES tenants(id),
+      action_type TEXT NOT NULL,
+      permission TEXT NOT NULL DEFAULT 'approval',
+      require_verification INTEGER NOT NULL DEFAULT 0,
+      updated_at INTEGER DEFAULT (unixepoch()),
+      UNIQUE(tenant_id, action_type)
+    );
   `);
 
   // Migrations for existing databases — ALTER TABLE ADD COLUMN fails if column exists,
@@ -107,7 +117,11 @@ export function initializeDatabase(): void {
     `ALTER TABLE tenants ADD COLUMN cipp_client_secret TEXT`,
     `ALTER TABLE tenants ADD COLUMN cipp_oauth_tenant_id TEXT`,
     `ALTER TABLE tenants ADD COLUMN cipp_api_scope TEXT`,
+    `ALTER TABLE tenants ADD COLUMN auto_confidence_min REAL DEFAULT 0.9`,
     `ALTER TABLE clients ADD COLUMN cipp_tenant_id TEXT`,
+    `ALTER TABLE action_logs ADD COLUMN verification_method TEXT`,
+    `ALTER TABLE action_logs ADD COLUMN verified_by TEXT`,
+    `ALTER TABLE action_logs ADD COLUMN verified_at INTEGER`,
     `ALTER TABLE action_logs ADD COLUMN approved_by TEXT`,
     `ALTER TABLE action_logs ADD COLUMN approved_at INTEGER`,
     `ALTER TABLE action_logs ADD COLUMN rejection_reason TEXT`,

@@ -8,6 +8,7 @@ import setupRoutes from './routes/setup';
 import tenantsRoutes from './routes/api/tenants';
 import clientsRoutes from './routes/api/clients';
 import actionsRoutes from './routes/api/actions';
+import policiesRoutes from './routes/api/policies';
 import { startPoller } from './services/poller';
 
 const app = express();
@@ -28,6 +29,7 @@ app.use('/api/setup', setupRoutes);
 app.use('/api/tenants', tenantsRoutes);
 app.use('/api/clients', clientsRoutes);
 app.use('/api/actions', actionsRoutes);
+app.use('/api/policies', policiesRoutes);
 
 // ─── Serve React SPA ──────────────────────────────────────────────────────────
 const webDistPath = path.join(__dirname, '..', 'web', 'dist');

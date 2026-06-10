@@ -10,7 +10,15 @@ const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || '';
 
 const NON_ACTIONABLE = new Set(['ESCALATE', 'FOLLOW_UP']);
 
-export async function executeAction(actionLogId: string, approvedBy: string): Promise<void> {
+export interface VerificationInfo {
+  method: string; // e.g. phone_callback, video_call, manager_confirmed
+}
+
+export async function executeAction(
+  actionLogId: string,
+  approvedBy: string,
+  verification?: VerificationInfo,
+): Promise<void> {
   const [actionLog] = await db.select().from(actionLogs).where(eq(actionLogs.id, actionLogId)).limit(1);
   if (!actionLog) throw new Error(`Action log ${actionLogId} not found`);
   if (actionLog.status !== 'awaiting_approval') {
@@ -32,7 +40,12 @@ export async function executeAction(actionLogId: string, approvedBy: string): Pr
 
   // Mark approved before executing
   const now = Math.floor(Date.now() / 1000);
-  await db.update(actionLogs).set({ status: 'executing', approvedBy, approvedAt: now }).where(eq(actionLogs.id, actionLogId));
+  await db.update(actionLogs).set({
+    status: 'executing',
+    approvedBy,
+    approvedAt: now,
+    ...(verification ? { verificationMethod: verification.method, verifiedBy: approvedBy, verifiedAt: now } : {}),
+  }).where(eq(actionLogs.id, actionLogId));
 
   const clientSecret = ENCRYPTION_KEY ? decrypt(tenant.cippClientSecret, ENCRYPTION_KEY) : tenant.cippClientSecret;
   const cipp = new CippClient(tenant.cippBaseUrl, tenant.cippClientId, clientSecret, tenant.cippOauthTenantId, tenant.cippApiScope);

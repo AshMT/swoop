@@ -95,13 +95,23 @@ export const getPendingCount = (tenantId?: string) =>
 export const getActionStats = (tenantId?: string) =>
   api.get<ActionStats>('/actions/stats', { params: tenantId ? { tenantId } : undefined });
 
-export const approveAction = (id: string) => api.post<ActionLog>(`/actions/${id}/approve`);
+export const approveAction = (id: string, verificationMethod?: string) =>
+  api.post<ActionLog>(`/actions/${id}/approve`, verificationMethod ? { verificationMethod } : {});
 
 export const rejectAction = (id: string, reason?: string) =>
   api.post<ActionLog>(`/actions/${id}/reject`, { reason });
 
 export const getExecutionLog = (actionId: string) =>
   api.get<ExecutionLog>(`/actions/${actionId}/execution`);
+
+// ─── Policies ─────────────────────────────────────────────────────────────────
+export const getPolicies = (tenantId: string) =>
+  api.get<ActionPolicy[]>('/policies', { params: { tenantId } });
+
+export const updatePolicy = (
+  actionType: string,
+  data: { tenantId: string; permission?: PolicyPermission; requireVerification?: boolean },
+) => api.patch<ActionPolicy>(`/policies/${actionType}`, data);
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 export interface Tenant {
@@ -116,8 +126,20 @@ export interface Tenant {
   cippClientId: string | null;
   cippOauthTenantId: string | null;
   cippApiScope: string | null;
+  autoConfidenceMin: number | null;
   lastPolledAt: number | null;
   createdAt: number | null;
+}
+
+export type PolicyPermission = 'approval' | 'auto' | 'disabled';
+
+export interface ActionPolicy {
+  actionType: string;
+  label: string;
+  description: string;
+  permission: PolicyPermission;
+  requireVerification: boolean;
+  isDefault: boolean;
 }
 
 export interface Client {
@@ -149,6 +171,9 @@ export interface ActionLog {
   approvedBy: string | null;
   approvedAt: number | null;
   rejectionReason: string | null;
+  verificationMethod: string | null;
+  verifiedBy: string | null;
+  verifiedAt: number | null;
   createdAt: number | null;
 }
 

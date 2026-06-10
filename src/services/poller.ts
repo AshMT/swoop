@@ -5,6 +5,8 @@ import { v4 as uuidv4 } from 'uuid';
 import { SuperOpsClient } from './psa/superops';
 import { classifyTicket } from './ai';
 import { decrypt } from './crypto';
+import { getPolicy } from './policies';
+import { executeAction } from './executor';
 import type { Tenant, Client, SuperOpsTicket } from '../types';
 
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || '';
@@ -174,33 +176,74 @@ async function processTicket(
     console.error(`[Poller] Failed to post note to ticket ${ticketId}:`, err);
   }
 
+  const cls = classification.classification;
+  const isActionable = cls !== 'ESCALATE' && cls !== 'FOLLOW_UP';
+
+  // Consult the action policy (Rallied-style permission catalog)
+  const policy = isActionable ? await getPolicy(tenant.id, cls) : null;
+
+  let status: string;
+  let reasoning = classification.reasoning;
+  if (cls === 'ESCALATE') {
+    status = 'escalated';
+  } else if (cls === 'FOLLOW_UP') {
+    status = 'follow_up';
+  } else if (policy?.permission === 'disabled') {
+    status = 'escalated';
+    reasoning = `${reasoning} [Action type "${cls}" is disabled by policy — escalated to a human]`;
+  } else {
+    status = 'awaiting_approval';
+  }
+
+  const actionLogId = uuidv4();
   await db.insert(actionLogs).values({
-    id: uuidv4(),
+    id: actionLogId,
     tenantId: tenant.id,
     clientId: matchedClient.id,
     ticketId,
     ticketSubject: ticket.subject,
     ticketBody: null,
     requesterEmail: requesterEmail || null,
-    classification: classification.classification,
+    classification: cls,
     confidence: classification.confidence,
     sensitivity: classification.sensitivity,
     entities: JSON.stringify(classification.entities),
-    reasoning: classification.reasoning,
+    reasoning,
     followUpQuestion: classification.follow_up_question,
     proposedPsaNote: noteText,
     rawAiResponse,
-    status: (() => {
-      const cls = classification.classification;
-      if (cls === 'ESCALATE') return 'escalated';
-      if (cls === 'FOLLOW_UP') return 'follow_up';
-      return 'awaiting_approval';
-    })(),
+    status,
   });
 
   console.log(
-    `[Poller] Ticket ${ticketId} → ${classification.classification} (confidence: ${classification.confidence.toFixed(2)})`,
+    `[Poller] Ticket ${ticketId} → ${cls} (confidence: ${classification.confidence.toFixed(2)}, policy: ${policy?.permission ?? 'n/a'})`,
   );
+
+  // Pre-approved (auto) execution — guarded by confidence threshold and sensitivity.
+  // High-sensitivity tickets ALWAYS require a human regardless of policy.
+  if (status === 'awaiting_approval' && policy?.permission === 'auto') {
+    const minConfidence = tenant.autoConfidenceMin ?? 0.9;
+    if (classification.sensitivity === 'high') {
+      console.log(`[Poller] Ticket ${ticketId}: auto policy skipped — high sensitivity requires human approval`);
+    } else if (classification.confidence < minConfidence) {
+      console.log(
+        `[Poller] Ticket ${ticketId}: auto policy skipped — confidence ${classification.confidence.toFixed(2)} below threshold ${minConfidence}`,
+      );
+    } else {
+      console.log(`[Poller] Ticket ${ticketId}: auto-executing per policy`);
+      try {
+        await executeAction(actionLogId, 'swoop:auto-policy');
+        const [after] = await db.select().from(actionLogs).where(eq(actionLogs.id, actionLogId)).limit(1);
+        const outcome = after?.status === 'executed' ? '✅ executed successfully' : '❌ execution failed — see Swoop dashboard';
+        try {
+          await superops.addTicketNote(ticketId, `🤖 **Swoop AI Agent** — pre-approved action auto-executed per policy: ${outcome}`, true);
+        } catch { /* note is best-effort */ }
+      } catch (err) {
+        // Pre-execution failure (e.g. CIPP not configured) — action stays awaiting_approval for a human
+        console.error(`[Poller] Auto-execution failed for ticket ${ticketId}, left in approval queue:`, err);
+      }
+    }
+  }
 }
 
 async function markProcessed(ticketId: string, tenantId: string): Promise<void> {

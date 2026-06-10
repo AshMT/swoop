@@ -23,8 +23,20 @@ export const tenants = sqliteTable('tenants', {
   cippClientSecret: text('cipp_client_secret'), // encrypted at rest
   cippOauthTenantId: text('cipp_oauth_tenant_id'), // MSP's Azure AD tenant ID for token requests
   cippApiScope: text('cipp_api_scope'), // CIPP-API resource scope, e.g. api://<cipp-api-app-id>/.default
+  autoConfidenceMin: real('auto_confidence_min').default(0.9), // min AI confidence for policy auto-execution
   lastPolledAt: integer('last_polled_at'),
   createdAt: integer('created_at').default(sql`(unixepoch())`),
+});
+
+// Per-action-type execution policy (Rallied-style permission catalog).
+// permission: 'approval' (human approves) | 'auto' (pre-approved, executes immediately) | 'disabled' (always escalate)
+export const actionPolicies = sqliteTable('action_policies', {
+  id: text('id').primaryKey(),
+  tenantId: text('tenant_id').references(() => tenants.id),
+  actionType: text('action_type').notNull(),
+  permission: text('permission').notNull().default('approval'),
+  requireVerification: integer('require_verification', { mode: 'boolean' }).notNull().default(false),
+  updatedAt: integer('updated_at').default(sql`(unixepoch())`),
 });
 
 export const clients = sqliteTable('clients', {
@@ -57,6 +69,9 @@ export const actionLogs = sqliteTable('action_logs', {
   approvedBy: text('approved_by'),
   approvedAt: integer('approved_at'),
   rejectionReason: text('rejection_reason'),
+  verificationMethod: text('verification_method'), // how the requester's identity was verified
+  verifiedBy: text('verified_by'),
+  verifiedAt: integer('verified_at'),
   createdAt: integer('created_at').default(sql`(unixepoch())`),
 });
 
