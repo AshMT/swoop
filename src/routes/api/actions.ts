@@ -1,11 +1,13 @@
 import { Router } from 'express';
 import { db } from '../../db';
-import { actionLogs, executionLogs } from '../../db/schema';
+import { actionLogs, executionLogs, tenants, clients } from '../../db/schema';
 import { eq, desc, and } from 'drizzle-orm';
 import { requireAuth, type AuthRequest } from '../../middleware/auth';
 import { executeAction } from '../../services/executor';
 import { getPolicy } from '../../services/policies';
 import { getActivePipeline } from '../../services/pipeline';
+import { classifyTicket } from '../../services/ai';
+import { formatProposalNote } from '../../services/poller';
 
 const router = Router();
 
@@ -109,6 +111,88 @@ router.get('/:id', async (req, res) => {
     return;
   }
   res.json(log);
+});
+
+// Retry an action that got stuck.
+//   failed      → reset to awaiting_approval so the user can re-approve and re-execute
+//   escalated / follow_up → re-run AI classification against stored ticket data;
+//                           if successful, moves to awaiting_approval
+router.post('/:id/retry', async (req: AuthRequest, res) => {
+  const { id } = req.params;
+
+  const [log] = await db.select().from(actionLogs).where(eq(actionLogs.id, id)).limit(1);
+  if (!log) {
+    res.status(404).json({ error: 'Action log not found' });
+    return;
+  }
+
+  if (!['failed', 'escalated', 'follow_up'].includes(log.status ?? '')) {
+    res.status(400).json({ error: `Retry is only available for failed, escalated, or follow_up actions (current: ${log.status})` });
+    return;
+  }
+
+  // Failed execution: reset to awaiting_approval so the user re-approves
+  if (log.status === 'failed') {
+    await db.update(actionLogs)
+      .set({ status: 'awaiting_approval', approvedBy: null, approvedAt: null })
+      .where(eq(actionLogs.id, id));
+    const [updated] = await db.select().from(actionLogs).where(eq(actionLogs.id, id)).limit(1);
+    res.json(updated);
+    return;
+  }
+
+  // Escalated / follow-up: re-run AI classification
+  const [tenant] = await db.select().from(tenants).where(eq(tenants.id, log.tenantId!)).limit(1);
+  if (!tenant) {
+    res.status(400).json({ error: 'Tenant not found' });
+    return;
+  }
+  const [client] = await db.select().from(clients).where(eq(clients.id, log.clientId!)).limit(1);
+
+  const { classification, rawResponse } = await classifyTicket(
+    {
+      subject: log.ticketSubject || '',
+      description: log.ticketBody || '',
+      requesterEmail: log.requesterEmail || '',
+    },
+    { mspName: tenant.name, clientName: client?.name || '' },
+    tenant,
+  );
+
+  const cls = classification.classification;
+  const isActionable = cls !== 'ESCALATE' && cls !== 'FOLLOW_UP';
+  const policy = isActionable ? await getPolicy(tenant.id, cls) : null;
+
+  let newStatus: string;
+  let reasoning = classification.reasoning;
+  if (cls === 'ESCALATE') {
+    newStatus = 'escalated';
+  } else if (cls === 'FOLLOW_UP') {
+    newStatus = 'follow_up';
+  } else if (policy?.permission === 'disabled') {
+    newStatus = 'escalated';
+    reasoning = `${reasoning} [Action type "${cls}" is disabled by policy — escalated to a human]`;
+  } else {
+    newStatus = 'awaiting_approval';
+  }
+
+  await db.update(actionLogs).set({
+    classification: cls,
+    confidence: classification.confidence,
+    sensitivity: classification.sensitivity,
+    entities: JSON.stringify(classification.entities),
+    reasoning,
+    followUpQuestion: classification.follow_up_question,
+    proposedPsaNote: formatProposalNote(classification, tenant.name),
+    rawAiResponse: rawResponse,
+    status: newStatus,
+    approvedBy: null,
+    approvedAt: null,
+    rejectionReason: null,
+  }).where(eq(actionLogs.id, id));
+
+  const [updated] = await db.select().from(actionLogs).where(eq(actionLogs.id, id)).limit(1);
+  res.json(updated);
 });
 
 router.post('/:id/approve', async (req: AuthRequest, res) => {

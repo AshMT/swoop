@@ -2,7 +2,7 @@ import { Fragment, useEffect, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   getActions, getActionStats, getClients, getTenants, getPolicies, getProcessing,
-  approveAction, rejectAction, getExecutionLog,
+  approveAction, rejectAction, retryAction, getExecutionLog,
   type ActionLog, type ActionPolicy, type Client, type ExecutionLog,
   type PipelineEntry, type PipelineStage,
 } from '../api';
@@ -227,7 +227,13 @@ function ActionRow({ log, client, policy }: { log: ActionLog; client?: Client; p
     onSuccess: () => { invalidate(); setShowRejectForm(false); setRejectReason(''); },
   });
 
+  const retryMutation = useMutation({
+    mutationFn: () => retryAction(log.id),
+    onSuccess: () => invalidate(),
+  });
+
   const isActionable = log.status === 'awaiting_approval';
+  const isRetryable = log.status === 'failed' || log.status === 'escalated' || log.status === 'follow_up';
 
   return (
     <>
@@ -319,6 +325,43 @@ function ActionRow({ log, client, policy }: { log: ActionLog; client?: Client; p
               {log.approvedBy === 'swoop:auto-policy' && (
                 <div className="md:col-span-2 text-xs text-green-800 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
                   ⚡ Auto-approved by policy — this action type is pre-approved and passed the confidence/sensitivity guardrails.
+                </div>
+              )}
+
+              {/* Retry */}
+              {isRetryable && (
+                <div className="md:col-span-2" onClick={(e) => e.stopPropagation()}>
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => retryMutation.mutate()}
+                      disabled={retryMutation.isPending}
+                      className="inline-flex items-center gap-1.5 px-4 py-2 bg-white border border-gray-300 text-gray-700 text-sm rounded-lg hover:bg-gray-50 disabled:opacity-50 font-medium transition-colors"
+                    >
+                      {retryMutation.isPending ? (
+                        <>
+                          <svg className="animate-spin h-3.5 w-3.5 text-gray-500" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+                          </svg>
+                          {log.status === 'failed' ? 'Resetting…' : 'Re-classifying…'}
+                        </>
+                      ) : (
+                        <>
+                          ↺ {log.status === 'failed' ? 'Reset for re-approval' : 'Re-classify'}
+                        </>
+                      )}
+                    </button>
+                    <span className="text-xs text-gray-400">
+                      {log.status === 'failed'
+                        ? 'Resets to awaiting approval so you can approve and re-execute'
+                        : 'Re-runs AI classification against this ticket'}
+                    </span>
+                  </div>
+                  {retryMutation.isError && (
+                    <p className="text-red-600 text-xs mt-2">
+                      {(retryMutation.error as Error)?.message || 'Retry failed'}
+                    </p>
+                  )}
                 </div>
               )}
 

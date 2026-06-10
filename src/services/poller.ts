@@ -8,6 +8,7 @@ import { decrypt } from './crypto';
 import { getPolicy } from './policies';
 import { executeAction } from './executor';
 import { trackStart, trackStage, trackDone } from './pipeline';
+import { warmupAi } from './ai';
 import type { Tenant, Client, SuperOpsTicket } from '../types';
 
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || '';
@@ -20,6 +21,9 @@ let noteFieldsLogged = false;
 export function startPoller(): void {
   if (pollerTimer) return;
   console.log('[Poller] Starting — interval: 60s');
+  // Warm up the AI model immediately so it's loaded before the first real ticket arrives.
+  // This runs in the background — polling starts regardless.
+  void db.select().from(tenants).limit(1).then(([t]) => { if (t) void warmupAi(t); });
   void runAllTenants();
   pollerTimer = setInterval(() => void runAllTenants(), POLL_INTERVAL_MS);
 }
@@ -267,7 +271,7 @@ async function markProcessed(ticketId: string, tenantId: string): Promise<void> 
     .onConflictDoNothing();
 }
 
-function formatProposalNote(classification: import('../types').AiClassification, mspName: string): string {
+export function formatProposalNote(classification: import('../types').AiClassification, mspName: string): string {
   const lines: string[] = [
     `🤖 **Swoop AI Agent** — ${mspName}`,
     ``,

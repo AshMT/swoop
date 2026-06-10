@@ -91,7 +91,7 @@ export async function classifyTicket(
   try {
     const response = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
-      signal: AbortSignal.timeout(300_000), // 5 min — large local models can be slow
+      signal: AbortSignal.timeout(600_000), // 10 min — local models load from disk on cold start
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`,
@@ -148,6 +148,33 @@ export async function classifyTicket(
       },
       rawResponse,
     };
+  }
+}
+
+// Sends a minimal prompt to force the model to load into GPU/CPU memory before
+// a real ticket arrives. Called once at poller startup. Fire-and-forget.
+export async function warmupAi(tenant: Tenant): Promise<void> {
+  const { baseUrl, apiKey, model } = getAiConfig(tenant);
+  try {
+    console.log(`[AI] Warming up model "${model}" at ${baseUrl}…`);
+    const res = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      signal: AbortSignal.timeout(600_000),
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: 'Reply with the single word: ready' }],
+        max_tokens: 10,
+        temperature: 0,
+      }),
+    });
+    if (res.ok) {
+      console.log(`[AI] Model "${model}" is warm and ready`);
+    } else {
+      console.warn(`[AI] Warmup responded with HTTP ${res.status}`);
+    }
+  } catch (err) {
+    console.warn('[AI] Warmup failed (model will cold-start on first ticket):', err instanceof Error ? err.message : err);
   }
 }
 

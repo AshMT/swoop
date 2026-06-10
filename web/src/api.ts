@@ -107,6 +107,9 @@ export const approveAction = (id: string, verificationMethod?: string) =>
 export const rejectAction = (id: string, reason?: string) =>
   api.post<ActionLog>(`/actions/${id}/reject`, { reason });
 
+export const retryAction = (id: string) =>
+  api.post<ActionLog>(`/actions/${id}/retry`);
+
 export const getExecutionLog = (actionId: string) =>
   api.get<ExecutionLog>(`/actions/${actionId}/execution`);
 
