@@ -5,6 +5,7 @@ import { eq, desc, and } from 'drizzle-orm';
 import { requireAuth, type AuthRequest } from '../../middleware/auth';
 import { executeAction } from '../../services/executor';
 import { getPolicy } from '../../services/policies';
+import { getActivePipeline } from '../../services/pipeline';
 
 const router = Router();
 
@@ -87,6 +88,13 @@ router.get('/stats', async (req, res) => {
   }
 
   res.json({ total, byClassification, byStatus, highSensitivity });
+});
+
+// Live view of tickets currently moving through the pipeline (in-memory, near-real-time).
+// Defined before '/:id' so it isn't captured by the param route.
+router.get('/processing', (req, res) => {
+  const tenantId = req.query.tenantId as string | undefined;
+  res.json(getActivePipeline(tenantId));
 });
 
 router.get('/:id', async (req, res) => {

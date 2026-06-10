@@ -7,6 +7,7 @@ import { classifyTicket } from './ai';
 import { decrypt } from './crypto';
 import { getPolicy } from './policies';
 import { executeAction } from './executor';
+import { trackStart, trackStage, trackDone } from './pipeline';
 import type { Tenant, Client, SuperOpsTicket } from '../types';
 
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || '';
@@ -146,10 +147,14 @@ async function processTicket(
   const requesterEmail = extractRequesterEmail(ticket.requester);
   console.log(`[Poller] Processing ticket ${ticketId}: "${ticket.subject}"`);
 
+  // Live pipeline view — surfaces the ticket on the Dashboard the moment it's picked up
+  trackStart({ ticketId, tenantId: tenant.id, subject: ticket.subject, clientName: matchedClient.name });
+
   let rawAiResponse = '';
   let classification;
 
   try {
+    trackStage(ticketId, 'classifying');
     const result = await classifyTicket(
       {
         subject: ticket.subject,
@@ -166,8 +171,12 @@ async function processTicket(
     rawAiResponse = result.rawResponse;
   } catch (err) {
     console.error(`[Poller] AI classification failed for ticket ${ticketId}:`, err);
+    trackDone(ticketId, 'failed');
     return; // already marked processed above
   }
+
+  const cls = classification.classification;
+  trackStage(ticketId, 'posting_note', { classification: cls, confidence: classification.confidence });
 
   const noteText = formatProposalNote(classification, tenant.name);
   try {
@@ -176,10 +185,10 @@ async function processTicket(
     console.error(`[Poller] Failed to post note to ticket ${ticketId}:`, err);
   }
 
-  const cls = classification.classification;
   const isActionable = cls !== 'ESCALATE' && cls !== 'FOLLOW_UP';
 
   // Consult the action policy (Rallied-style permission catalog)
+  trackStage(ticketId, 'deciding');
   const policy = isActionable ? await getPolicy(tenant.id, cls) : null;
 
   let status: string;
@@ -221,6 +230,7 @@ async function processTicket(
 
   // Pre-approved (auto) execution — guarded by confidence threshold and sensitivity.
   // High-sensitivity tickets ALWAYS require a human regardless of policy.
+  let finalOutcome = status;
   if (status === 'awaiting_approval' && policy?.permission === 'auto') {
     const minConfidence = tenant.autoConfidenceMin ?? 0.9;
     if (classification.sensitivity === 'high') {
@@ -231,9 +241,11 @@ async function processTicket(
       );
     } else {
       console.log(`[Poller] Ticket ${ticketId}: auto-executing per policy`);
+      trackStage(ticketId, 'executing');
       try {
         await executeAction(actionLogId, 'swoop:auto-policy');
         const [after] = await db.select().from(actionLogs).where(eq(actionLogs.id, actionLogId)).limit(1);
+        finalOutcome = after?.status ?? status;
         const outcome = after?.status === 'executed' ? '✅ executed successfully' : '❌ execution failed — see Swoop dashboard';
         try {
           await superops.addTicketNote(ticketId, `🤖 **Swoop AI Agent** — pre-approved action auto-executed per policy: ${outcome}`, true);
@@ -244,6 +256,8 @@ async function processTicket(
       }
     }
   }
+
+  trackDone(ticketId, finalOutcome);
 }
 
 async function markProcessed(ticketId: string, tenantId: string): Promise<void> {

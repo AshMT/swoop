@@ -1,8 +1,10 @@
-import { useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  getActions, getActionStats, getClients, getTenants, getPolicies, approveAction, rejectAction, getExecutionLog,
+  getActions, getActionStats, getClients, getTenants, getPolicies, getProcessing,
+  approveAction, rejectAction, getExecutionLog,
   type ActionLog, type ActionPolicy, type Client, type ExecutionLog,
+  type PipelineEntry, type PipelineStage,
 } from '../api';
 
 const VERIFICATION_METHODS = [
@@ -70,6 +72,125 @@ function ConfidenceBar({ value }: { value: number | null }) {
         <div className={`h-1.5 rounded-full ${color}`} style={{ width: `${pct}%` }} />
       </div>
       <span className="text-xs text-gray-600">{pct}%</span>
+    </div>
+  );
+}
+
+// ─── Live processing pipeline ────────────────────────────────────────────────
+const PIPELINE_STEPS = ['Detected', 'Classifying', 'Reviewing', 'Done'];
+
+function stageIndex(stage: PipelineStage): number {
+  switch (stage) {
+    case 'detected': return 0;
+    case 'classifying': return 1;
+    case 'posting_note':
+    case 'deciding':
+    case 'executing': return 2;
+    case 'done': return 3;
+  }
+}
+
+function PipelineCard({ entry }: { entry: PipelineEntry }) {
+  const current = stageIndex(entry.stage);
+  const done = entry.stage === 'done';
+  // The middle step is relabelled while an action is actually firing.
+  const steps = entry.stage === 'executing'
+    ? ['Detected', 'Classifying', 'Executing', 'Done']
+    : PIPELINE_STEPS;
+
+  return (
+    <div className="rounded-xl border border-gray-200 bg-white px-4 py-3">
+      <div className="flex items-center justify-between gap-3 mb-3">
+        <div className="min-w-0">
+          <div className="text-sm font-medium text-gray-900 truncate">{entry.subject}</div>
+          <div className="text-xs text-gray-400">
+            <span className="font-mono">#{entry.ticketId}</span> · {entry.clientName}
+          </div>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          {entry.classification && <ClassificationBadge cls={entry.classification} />}
+          {done && entry.outcome && <StatusBadge status={entry.outcome} />}
+        </div>
+      </div>
+
+      <div className="flex items-center">
+        {steps.map((label, i) => {
+          const state = done || i < current ? 'complete' : i === current ? 'active' : 'pending';
+          const dot =
+            state === 'complete' ? 'bg-green-500'
+            : state === 'active' ? 'bg-swoop-500 animate-pulse ring-4 ring-swoop-100'
+            : 'bg-gray-300';
+          const text =
+            state === 'complete' ? 'text-green-700'
+            : state === 'active' ? 'text-swoop-700 font-semibold'
+            : 'text-gray-400';
+          return (
+            <Fragment key={i}>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <span className={`w-2.5 h-2.5 rounded-full ${dot}`} />
+                <span className={`text-xs ${text}`}>{label}</span>
+              </div>
+              {i < steps.length - 1 && (
+                <div className={`flex-1 h-px mx-2 ${done || i < current ? 'bg-green-300' : 'bg-gray-200'}`} />
+              )}
+            </Fragment>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function LiveProcessing({ tenantId }: { tenantId?: string }) {
+  const queryClient = useQueryClient();
+  const flushedRef = useRef<Set<string>>(new Set());
+  const { data: entries = [] } = useQuery({
+    queryKey: ['processing', tenantId],
+    queryFn: () => getProcessing(tenantId).then((r) => r.data),
+    enabled: !!tenantId,
+    refetchInterval: 2_000,
+  });
+
+  // When a ticket finishes, pull the freshly-created action log into the table/stats
+  // immediately instead of waiting for their slower refetch interval.
+  useEffect(() => {
+    const newlyDone = entries.filter((e) => e.stage === 'done' && !flushedRef.current.has(e.ticketId));
+    if (newlyDone.length > 0) {
+      newlyDone.forEach((e) => flushedRef.current.add(e.ticketId));
+      void queryClient.invalidateQueries({ queryKey: ['actions'] });
+      void queryClient.invalidateQueries({ queryKey: ['stats'] });
+    }
+  }, [entries, queryClient]);
+
+  const active = entries.length;
+
+  return (
+    <div className="sticker p-5 mb-6">
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <span className="relative flex h-2.5 w-2.5">
+            {active > 0 && (
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-swoop-400 opacity-75" />
+            )}
+            <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${active > 0 ? 'bg-swoop-500' : 'bg-gray-300'}`} />
+          </span>
+          <h2 className="text-sm font-semibold text-gray-800">Live processing</h2>
+        </div>
+        <span className="text-xs text-gray-400">
+          {active > 0 ? `${active} ticket${active > 1 ? 's' : ''} in progress` : 'Idle — watching for new tickets'}
+        </span>
+      </div>
+
+      {active === 0 ? (
+        <p className="text-xs text-gray-400">
+          Nothing processing right now. New tickets appear here the moment Swoop picks them up, and you'll
+          see each step as it happens.
+        </p>
+      ) : (
+        <div className="space-y-3">
+          {entries.map((e) => <PipelineCard key={e.ticketId} entry={e} />)}
+        </div>
+      )}
     </div>
   );
 }
@@ -378,6 +499,9 @@ export default function Dashboard() {
         <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
         <p className="text-gray-500 text-sm mt-1">AI-classified tickets — review and approve M365 actions</p>
       </div>
+
+      {/* Live processing pipeline */}
+      <LiveProcessing tenantId={tenantId} />
 
       {/* Stats */}
       {stats && (

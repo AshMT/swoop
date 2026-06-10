@@ -95,6 +95,9 @@ export const getActions = (params?: { clientId?: string; tenantId?: string; clas
 export const getPendingCount = (tenantId?: string) =>
   api.get<{ pending: number }>('/actions/pending-count', { params: tenantId ? { tenantId } : undefined });
 
+export const getProcessing = (tenantId?: string) =>
+  api.get<PipelineEntry[]>('/actions/processing', { params: tenantId ? { tenantId } : undefined });
+
 export const getActionStats = (tenantId?: string) =>
   api.get<ActionStats>('/actions/stats', { params: tenantId ? { tenantId } : undefined });
 
@@ -145,6 +148,27 @@ export interface IntegrationStatus {
   ai: IntegrationCheck;
   cipp: IntegrationCheck;
   checkedAt: number;
+}
+
+export type PipelineStage =
+  | 'detected'
+  | 'classifying'
+  | 'posting_note'
+  | 'deciding'
+  | 'executing'
+  | 'done';
+
+export interface PipelineEntry {
+  ticketId: string;
+  tenantId: string;
+  subject: string;
+  clientName: string;
+  stage: PipelineStage;
+  classification: string | null;
+  confidence: number | null;
+  outcome: string | null;
+  startedAt: number;
+  updatedAt: number;
 }
 
 export type PolicyPermission = 'approval' | 'auto' | 'disabled';
