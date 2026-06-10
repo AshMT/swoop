@@ -8,70 +8,147 @@ interface MagpieProps {
 }
 
 /**
- * Stylized magpie in flight — wings swept up, head right, tail fanned down-left.
- * The ink silhouette lives in <defs>; the sticker effect duplicates it
- * underneath with a fat white stroke so the white margin follows the
- * bird's outline exactly, like a die-cut sticker.
+ * Magpie sticker logo — wings raised wide with individual feather primaries,
+ * white secondary covert bands, white belly, fan tail, and die-cut border.
+ * Matches the provided black-and-white sticker illustration.
  */
 export default function Magpie({ size = 40, className = '', sticker = true }: MagpieProps) {
-  const id = useId().replace(/:/g, '');
-  const inkId = `magpie-ink-${id}`;
+  const uid = useId().replace(/:/g, '');
+  const gId = `magpie-${uid}`;
+
+  // 220 × 185 viewport; height derived from size prop
+  const h = Math.round((size * 185) / 220);
 
   return (
     <svg
       width={size}
-      height={size}
-      viewBox="0 0 128 128"
+      height={h}
+      viewBox="0 0 220 185"
       className={className}
-      style={sticker ? { filter: 'drop-shadow(0 3px 5px rgba(14,14,14,0.28))' } : undefined}
+      style={sticker ? { filter: 'drop-shadow(0 2px 7px rgba(0,0,0,0.35))' } : undefined}
       aria-label="Swoop magpie"
       role="img"
     >
       <defs>
-        <g id={inkId}>
-          {/* Right wing — steep fan so the head and beak stay clear below it */}
-          <ellipse cx="92" cy="31" rx="23" ry="5.5" transform="rotate(-35 92 31)" />
-          <ellipse cx="87" cy="27.5" rx="22" ry="5" transform="rotate(-52 87 27.5)" />
-          <ellipse cx="81" cy="26" rx="19" ry="4.8" transform="rotate(-68 81 26)" />
-          <ellipse cx="76" cy="28" rx="16" ry="4.5" transform="rotate(-82 76 28)" />
-          {/* Left wing */}
-          <ellipse cx="44" cy="33" rx="23" ry="5.5" transform="rotate(35 44 33)" />
-          <ellipse cx="49" cy="29.5" rx="22" ry="5" transform="rotate(52 49 29.5)" />
-          <ellipse cx="55" cy="28" rx="19" ry="4.8" transform="rotate(68 55 28)" />
-          <ellipse cx="60" cy="30" rx="16" ry="4.5" transform="rotate(82 60 30)" />
-          {/* Tail — long fan down-left */}
-          <ellipse cx="41.5" cy="83.5" rx="19" ry="4.5" transform="rotate(-30 41.5 83.5)" />
-          <ellipse cx="45.3" cy="86.7" rx="19" ry="4.5" transform="rotate(-45 45.3 86.7)" />
-          <ellipse cx="50" cy="88" rx="18" ry="4.5" transform="rotate(-60 50 88)" />
-          {/* Body — diagonal, hip lower-left to neck upper-right */}
-          <ellipse cx="76" cy="42" rx="9" ry="7" transform="rotate(-30 76 42)" />
-      <ellipse cx="58" cy="43" rx="9" ry="7" transform="rotate(30 58 43)" />
-      <ellipse cx="68" cy="60" rx="13" ry="19" transform="rotate(-28 68 60)" />
-          {/* Head */}
-          <circle cx="86" cy="38" r="10.5" />
-          {/* Beak */}
-          <path d="M95 34 L110 40 L95 46 Z" />
+        {/*
+          All black shapes with NO explicit fill/stroke — attributes propagate
+          from <use>: white + fat stroke for the sticker border, then black for the bird.
+        */}
+        <g id={gId}>
+
+          {/* ══ RIGHT WING — sweeps upper-left ══
+              Leading edge: smooth curve from body to tip.
+              Trailing edge: 5 deep scallops = individual primary feather tips.
+          */}
+          <path d="
+            M 104,98
+            C 84,84 58,64 28,44
+            C 17,36  4,33  3,43
+            C  1,52 13,58 26,62
+            C 17,68  8,74 13,81
+            C 20,85 31,81 38,74
+            C 32,80 25,88 31,94
+            C 38,97 50,92 55,84
+            C 50,91 46,98 54,102
+            C 62,105 74,99  77,91
+            C 82,97 90,100 99,100
+            C 101,99 103,98 104,98 Z
+          " />
+
+          {/* ══ LEFT WING — sweeps upper-right ══ */}
+          <path d="
+            M 142,94
+            C 162,82 186,64 206,46
+            C 214,39 218,35 214,44
+            C 210,52 198,58 186,63
+            C 193,68 202,74 197,81
+            C 190,85 179,81 172,74
+            C 178,80 185,88 179,94
+            C 172,97 160,92 155,84
+            C 160,91 164,98 156,102
+            C 148,105 136,99 133,91
+            C 136,97 140,94 142,94 Z
+          " />
+
+          {/* ══ Body ══ */}
+          <ellipse cx="122" cy="114" rx="22" ry="30" transform="rotate(-8 122 114)" />
+
+          {/* ══ Neck ══ */}
+          <ellipse cx="139" cy="91" rx="13" ry="11" transform="rotate(-26 139 91)" />
+
+          {/* ══ Head ══ */}
+          <circle cx="152" cy="74" r="18" />
+
+          {/* ══ Beak ══ */}
+          <path d="M 167,68 L 196,76 L 167,84 Z" />
+
+          {/* ══ Tail fan — wide, spreading downward with 4 feathers ══ */}
+          <path d="
+            M 110,135
+            C 106,146  96,159  82,170
+            C  74,176  62,181  57,184
+            L  66,182
+            C  61,184  71,183  78,178
+            L  74,181
+            C  81,180  90,171  95,164
+            L  92,168
+            C  99,167 106,157 108,148
+            L 107,153
+            C 114,151 117,140 115,134
+            C 115,140 116,145 122,140
+            C 124,133 121,134 110,135 Z
+          " />
+
+          {/* ══ Legs — thick filled shapes ══ */}
+          <path d="M 119,138 C 117,147 115,155 114,161 C 116,162 118,161 119,160 C 120,154 122,146 123,138 Z" />
+          <path d="M 131,138 C 131,147 133,155 135,161 C 137,162 139,161 137,159 C 136,153 134,145 132,138 Z" />
+
+          {/* ══ Talons ══ */}
+          {/* Left foot */}
+          <path d="M 114,161 C 108,164 103,163 101,159 C 103,156 108,158 112,155 Z" />
+          <path d="M 114,161 C 110,167 108,171 113,172 C 115,170 115,165 117,161 Z" />
+          <path d="M 114,161 C 116,167 118,171 123,170 C 124,167 121,163 118,160 Z" />
+          {/* Right foot */}
+          <path d="M 135,161 C 129,164 124,165 123,161 C 125,158 130,160 133,157 Z" />
+          <path d="M 135,161 C 134,167 134,171 138,172 C 140,170 139,165 138,161 Z" />
+          <path d="M 135,161 C 138,165 143,166 145,163 C 145,159 140,158 137,158 Z" />
+
         </g>
       </defs>
 
+      {/* Die-cut sticker border */}
       {sticker && (
-        /* Die-cut white margin: fattened all-white copy of the silhouette */
-        <use href={`#${inkId}`} fill="#ffffff" stroke="#ffffff" strokeWidth="9" strokeLinejoin="round" />
+        <use
+          href={`#${gId}`}
+          fill="white"
+          stroke="white"
+          strokeWidth="13"
+          strokeLinejoin="round"
+        />
       )}
 
-      {/* Ink bird */}
-      <use href={`#${inkId}`} fill="#0E0E0E" />
+      {/* Black bird */}
+      <use href={`#${gId}`} fill="#0E0E0E" />
 
-      {/* White markings — wing bands, belly, tail band */}
-      <ellipse cx="89" cy="29" rx="7" ry="2.6" transform="rotate(-35 89 29)" fill="#ffffff" />
-      <ellipse cx="84" cy="23" rx="6" ry="2.3" transform="rotate(-52 84 23)" fill="#ffffff" />
-      <ellipse cx="47" cy="31" rx="7" ry="2.6" transform="rotate(35 47 31)" fill="#ffffff" />
-      <ellipse cx="52" cy="25" rx="6" ry="2.3" transform="rotate(52 52 25)" fill="#ffffff" />
-      <ellipse cx="66" cy="62" rx="4.5" ry="7.5" transform="rotate(-28 66 62)" fill="#ffffff" />
-      <ellipse cx="36" cy="88" rx="6" ry="2.4" transform="rotate(-30 36 88)" fill="#ffffff" />
-      {/* Eye */}
-      <circle cx="89.5" cy="35.5" r="2.5" fill="#ffffff" />
-      <circle cx="90.2" cy="35.5" r="1.1" fill="#0E0E0E" />
+      {/* ── White belly (large, prominent) ── */}
+      <ellipse cx="120" cy="118" rx="11" ry="17" transform="rotate(-8 120 118)" fill="white" />
+
+      {/* ── White secondary covert bands — right wing (2 stripes) ── */}
+      <ellipse cx="59" cy="64" rx="18" ry="5.5" transform="rotate(-24 59 64)" fill="white" />
+      <ellipse cx="43" cy="77" rx="15" ry="5" transform="rotate(-16 43 77)" fill="white" />
+
+      {/* ── White secondary covert bands — left wing (2 stripes) ── */}
+      <ellipse cx="177" cy="62" rx="18" ry="5.5" transform="rotate(24 177 62)" fill="white" />
+      <ellipse cx="163" cy="75" rx="15" ry="5" transform="rotate(16 163 75)" fill="white" />
+
+      {/* ── White tail feather accents ── */}
+      <path d="M 59,181 C 64,185 72,185 76,181" stroke="white" strokeWidth="4" fill="none" strokeLinecap="round" />
+      <path d="M 80,173 C 85,177 93,177 96,173" stroke="white" strokeWidth="3.5" fill="none" strokeLinecap="round" />
+      <path d="M 100,162 C 104,166 111,165 113,162" stroke="white" strokeWidth="3" fill="none" strokeLinecap="round" />
+
+      {/* ── Eye ── */}
+      <circle cx="157" cy="71" r="5.5" fill="white" />
+      <circle cx="158.5" cy="71" r="2.4" fill="#0E0E0E" />
     </svg>
   );
 }
