@@ -33,6 +33,13 @@ RULES:
 - The ticket may contain an "ADDITIONAL INFORMATION GATHERED" section with answers
   the customer already gave — use it; do not re-ask for information already provided
 
+LICENSE REMOVAL RULES (license_remove):
+- If the customer says "all their licenses", "whatever license(s) they have", "their existing license",
+  "any licenses assigned to them", "whatever they currently have", or any phrase meaning all of them →
+  set license_sku to "ALL". This is a COMPLETE, VALID answer. Do NOT generate a FOLLOW_UP.
+- Only FOLLOW_UP for license_remove when the ticket gives NO indication at all (not even "all of them").
+- "ALL" means: enumerate the user's currently assigned licenses and remove every one.
+
 RESPONSE FORMAT (JSON only, no markdown wrapper):
 {
   "classification": "string",

@@ -244,13 +244,53 @@ export class CippClient {
         case 'license_remove': {
           if (!entities.target_user_email) throw new Error('target_user_email required for license_remove');
           if (!entities.license_sku) throw new Error('license_sku required for license_remove');
-          onStep?.(`Calling CIPP EditUser — removing license ${entities.license_sku} from ${entities.target_user_email}...`);
-          response = await this.request(
-            '/api/EditUser',
-            { TenantFilter: tenantFilter },
-            { id: entities.target_user_email, licenses: [{ skuId: entities.license_sku }], licenseAction: 'Remove' },
-          );
-          onStep?.(`License ${entities.license_sku} removed from ${entities.target_user_email}`);
+
+          const removeAll = /^(all|current|any)$/i.test(entities.license_sku.trim());
+
+          if (removeAll) {
+            onStep?.(`Fetching assigned licenses for ${entities.target_user_email}...`);
+            let skus: string[] = [];
+            try {
+              const usersRes = await this.request('/api/ListUsers', {
+                TenantFilter: tenantFilter,
+                UserId: entities.target_user_email,
+              });
+              const users = Array.isArray(usersRes) ? usersRes : (usersRes ? [usersRes] : []);
+              const user = (users as Array<Record<string, unknown>>).find(u =>
+                String(u.userPrincipalName ?? '').toLowerCase() === entities.target_user_email!.toLowerCase() ||
+                String(u.mail ?? '').toLowerCase() === entities.target_user_email!.toLowerCase(),
+              );
+              const assigned = user?.assignedLicenses as Array<{ skuId?: string; SkuId?: string }> | undefined;
+              if (Array.isArray(assigned)) {
+                skus = assigned.map(l => (l.skuId || l.SkuId || '')).filter(Boolean);
+              }
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              onStep?.(`Could not enumerate licenses automatically: ${msg.slice(0, 200)}`);
+            }
+
+            if (skus.length === 0) {
+              onStep?.(`No licenses found for ${entities.target_user_email} — nothing to remove`);
+              response = { message: 'No licenses found to remove' };
+              break;
+            }
+
+            onStep?.(`Found ${skus.length} license(s) — removing all from ${entities.target_user_email}...`);
+            response = await this.request(
+              '/api/EditUser',
+              { TenantFilter: tenantFilter },
+              { id: entities.target_user_email, licenses: skus.map(s => ({ skuId: s })), licenseAction: 'Remove' },
+            );
+            onStep?.(`All ${skus.length} license(s) removed from ${entities.target_user_email}`);
+          } else {
+            onStep?.(`Calling CIPP EditUser — removing license ${entities.license_sku} from ${entities.target_user_email}...`);
+            response = await this.request(
+              '/api/EditUser',
+              { TenantFilter: tenantFilter },
+              { id: entities.target_user_email, licenses: [{ skuId: entities.license_sku }], licenseAction: 'Remove' },
+            );
+            onStep?.(`License ${entities.license_sku} removed from ${entities.target_user_email}`);
+          }
           break;
         }
 
