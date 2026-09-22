@@ -221,6 +221,22 @@ export const migrations: Migration[] = [
       addColumnIfMissing(db, 'tenants', 'classify_concurrency', 'INTEGER DEFAULT 1');
     },
   },
+
+  {
+    id: '009_note_format',
+    up: (db) => {
+      // Defaults to plain: a note full of raw Markdown asterisks reads worse
+      // than plain text, and it is visible on every ticket.
+      addColumnIfMissing(db, 'tenants', 'note_format', `TEXT DEFAULT 'plain'`);
+    },
+  },
+
+  {
+    id: '010_client_prompt_override',
+    up: (db) => {
+      addColumnIfMissing(db, 'clients', 'system_prompt_override', 'TEXT');
+    },
+  },
 ];
 
 /**

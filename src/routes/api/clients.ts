@@ -23,6 +23,7 @@ router.get('/', async (req, res) => {
       superopsCompanyId: clients.superopsCompanyId,
       automationEnabled: clients.automationEnabled,
       contextNotes: clients.contextNotes,
+      systemPromptOverride: clients.systemPromptOverride,
       createdAt: clients.createdAt,
       actionCount: sql<number>`(select count(*) from ${actionLogs} where ${actionLogs.clientId} = ${clients.id})`,
       lastActionAt: sql<number | null>`(select max(${actionLogs.createdAt}) from ${actionLogs} where ${actionLogs.clientId} = ${clients.id})`,
@@ -49,6 +50,7 @@ const createSchema = z.object({
   superopsCompanyId: z.string().max(200).optional(),
   automationEnabled: z.boolean().optional(),
   contextNotes: z.string().max(5000).optional(),
+  systemPromptOverride: z.string().max(20_000).optional(),
 });
 
 router.post('/', async (req, res) => {
@@ -58,7 +60,8 @@ router.post('/', async (req, res) => {
     return;
   }
 
-  const { tenantId, name, superopsCompanyId, automationEnabled, contextNotes } = parsed.data;
+  const { tenantId, name, superopsCompanyId, automationEnabled, contextNotes, systemPromptOverride } =
+    parsed.data;
 
   const [tenant] = await db.select({ id: tenants.id }).from(tenants).where(eq(tenants.id, tenantId)).limit(1);
   if (!tenant) {
@@ -89,6 +92,7 @@ router.post('/', async (req, res) => {
     superopsCompanyId: trimmedCompanyId,
     automationEnabled: automationEnabled ?? false,
     contextNotes: contextNotes?.trim() || null,
+    systemPromptOverride: systemPromptOverride?.trim() || null,
   });
 
   const [created] = await db.select().from(clients).where(eq(clients.id, id)).limit(1);
@@ -100,6 +104,7 @@ const updateSchema = z.object({
   superopsCompanyId: z.string().max(200).nullable().optional(),
   automationEnabled: z.boolean().optional(),
   contextNotes: z.string().max(5000).nullable().optional(),
+  systemPromptOverride: z.string().max(20_000).nullable().optional(),
 });
 
 router.patch('/:id', async (req, res) => {
@@ -122,6 +127,9 @@ router.patch('/:id', async (req, res) => {
   }
   if (updates.contextNotes !== undefined) {
     updates.contextNotes = updates.contextNotes?.trim() || null;
+  }
+  if (updates.systemPromptOverride !== undefined) {
+    updates.systemPromptOverride = updates.systemPromptOverride?.trim() || null;
   }
 
   if (updates.name && existing.tenantId) {

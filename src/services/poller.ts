@@ -8,7 +8,7 @@ import type { SuperOpsClient } from './psa/superops';
 import { PsaError } from './psa/superops';
 import type { PsaTicket } from './psa/interface';
 import { classifyTicket, applyPolicy, AiError } from './ai';
-import { formatProposalNote } from './note-format';
+import { formatProposalNote, isNoteFormat } from './note-format';
 import { matchTicketToClient, emptySummary, type PollSummary } from './matching';
 import { pruneAllTenants } from './retention';
 import { createLogger, describeError } from '../lib/logger';
@@ -427,6 +427,7 @@ async function processTicket(
         confidenceThreshold: threshold,
       },
       tenant,
+      matchedClient.systemPromptOverride,
     );
   } catch (err) {
     const message = describeError(err);
@@ -458,6 +459,7 @@ async function processTicket(
     mspName: tenant.name,
     dryRun: Boolean(tenant.dryRun),
     adjustments,
+    format: isNoteFormat(tenant.noteFormat) ? tenant.noteFormat : 'plain',
   });
 
   let notePosted = false;
@@ -692,6 +694,7 @@ export async function reclassifyTicket(
         confidenceThreshold: threshold,
       },
       tenant,
+      client?.systemPromptOverride,
     );
   } catch (err) {
     return { ok: false, error: describeError(err) };
@@ -706,6 +709,7 @@ export async function reclassifyTicket(
     mspName: tenant.name,
     dryRun: !options.postNote || Boolean(tenant.dryRun),
     adjustments,
+    format: isNoteFormat(tenant.noteFormat) ? tenant.noteFormat : 'plain',
   });
 
   let notePosted = false;

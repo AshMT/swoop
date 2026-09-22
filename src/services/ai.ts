@@ -7,6 +7,7 @@ import {
   resolveSystemPrompt,
   buildTicketContent,
   promptFingerprint,
+  promptSource,
   type PromptContext,
   type TicketPromptInput,
 } from '../prompts/system';
@@ -59,6 +60,8 @@ export interface ClassificationResult {
   model: string;
   /** Identifies the prompt-and-model combination, for calibration scoping. */
   promptFingerprint: string;
+  /** Which layer supplied the prompt: client, tenant or the built-in one. */
+  promptSource: 'client' | 'tenant' | 'builtin';
   latencyMs: number;
   promptTokens: number | null;
   completionTokens: number | null;
@@ -106,12 +109,15 @@ export async function classifyTicket(
   ticket: TicketPromptInput,
   context: PromptContext,
   tenant: Pick<Tenant, 'aiBaseUrl' | 'aiApiKey' | 'aiModel' | 'systemPromptOverride'>,
+  /** A per-client prompt, which takes precedence over the tenant's. */
+  clientPromptOverride?: string | null,
 ): Promise<ClassificationResult> {
   const aiConfig = resolveAiConfig(tenant);
-  const systemPrompt = resolveSystemPrompt(context, tenant.systemPromptOverride);
+  const overrides = { client: clientPromptOverride, tenant: tenant.systemPromptOverride };
+  const systemPrompt = resolveSystemPrompt(context, overrides);
   const userPrompt = buildTicketContent(ticket);
 
-  const fingerprint = promptFingerprint(tenant.systemPromptOverride, aiConfig.model);
+  const fingerprint = promptFingerprint(overrides, aiConfig.model);
   const started = Date.now();
   let lastError: AiError | null = null;
 
@@ -153,6 +159,7 @@ export async function classifyTicket(
         rawResponse: raw,
         model: aiConfig.model,
         promptFingerprint: fingerprint,
+        promptSource: promptSource(overrides),
         latencyMs: Date.now() - started,
         promptTokens: usage?.prompt_tokens ?? null,
         completionTokens: usage?.completion_tokens ?? null,

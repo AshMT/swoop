@@ -73,6 +73,7 @@ export interface Tenant {
   automationPaused: boolean | null;
   dryRun: boolean | null;
   systemPromptOverride: string | null;
+  noteFormat: string | null;
   logRetentionDays: number | null;
   psaCapabilitiesProbedAt: number | null;
   lastPollStatus: string | null;
@@ -92,6 +93,7 @@ export interface Client {
   superopsCompanyId: string | null;
   automationEnabled: boolean;
   contextNotes: string | null;
+  systemPromptOverride: string | null;
   createdAt: number | null;
   actionCount?: number;
   lastActionAt?: number | null;
@@ -351,6 +353,13 @@ export interface LogStorage {
 
 export const getLogStorage = (id: string) => api.get<LogStorage>(`/tenants/${id}/log-storage`);
 
+export interface NotePreview {
+  current: string;
+  formats: Array<{ id: string; label: string; description: string; preview: string }>;
+}
+
+export const getNotePreview = (id: string) => api.get<NotePreview>(`/tenants/${id}/note-preview`);
+
 export const pruneLogs = (id: string) =>
   api.post<{ ok: boolean; bodiesCleared: number; rowsDeleted: number; ledgerRowsDeleted: number }>(
     `/tenants/${id}/prune-logs`,
@@ -371,6 +380,7 @@ export const createClient = (data: {
   superopsCompanyId?: string;
   automationEnabled?: boolean;
   contextNotes?: string;
+  systemPromptOverride?: string;
 }) => api.post<Client>('/clients', data);
 
 export const updateClient = (id: string, data: Partial<Client>) => api.patch<Client>(`/clients/${id}`, data);

@@ -138,6 +138,8 @@ Each client can also carry **context for the AI**: naming conventions, who count
 
 > Email addresses are firstname.lastname@acme.com. The finance team are all VIPs — treat anything from them as high sensitivity. They use Duo, not Microsoft Authenticator.
 
+A client whose ticket mix is different enough that shared wording cannot serve it can also have its **own prompt**, which replaces the tenant prompt for that client rather than being appended to it. Its accuracy is then tracked as its own version on the Calibration page, so it is not averaged in with everyone else's.
+
 ---
 
 ## Calibrating
@@ -170,6 +172,7 @@ Under **Settings → Behaviour**:
 - **Poll interval** — 15 to 3600 seconds. 60 suits most desks.
 - **Confidence threshold** — anything the model is less sure of is escalated instead.
 - **Concurrency** — how many tickets are classified at once, 1 to 8. Leave it at 1 for a hosted provider. Raise it when a local model is falling behind: an 8B model on CPU can take tens of seconds per ticket, and one at a time means a morning's backlog clears slower than handling it by hand.
+- **Note format** — plain text, Markdown or HTML. Plain is the default because it reads correctly even where the PSA renders nothing, and a note full of raw asterisks is visible on every ticket. Settings shows a worked example of each, so you can paste one into a test ticket and set whichever your instance renders.
 - **Log retention** — off by default. Every log row keeps the full ticket body and the raw model response, which is what makes the log useful for debugging and also what makes it grow without bound. With a window set, the bulky text is cleared at a third of it and the row deleted at the end; the classification and your review survive the first stage, so accuracy figures are unaffected. The panel shows how much text is currently stored.
 
 **Settings → Diagnostics** shows poll health, the last error in full, and the discovered schema. Poll failures also appear as a banner across the top of the app, because an operator whose API token expired should not have to read container logs to find out.

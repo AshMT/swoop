@@ -6,6 +6,7 @@ import {
   getCapabilities,
   getDefaultPrompt,
   getLogStorage,
+  getNotePreview,
   getSystemStatus,
   getTenants,
   pruneLogs,
@@ -575,8 +576,89 @@ function BehaviourSection({ tenant }: { tenant: Tenant }) {
         <SaveButton state={state} />
       </form>
 
+      <NoteFormatSection tenant={tenant} />
       <RetentionSection tenant={tenant} />
     </div>
+  );
+}
+
+/**
+ * Whether a PSA renders Markdown or HTML in a note cannot be settled from
+ * outside a real instance, and guessing wrong is visible on every ticket — a
+ * note full of raw asterisks reads worse than plain text. So rather than
+ * guess, show exactly what each option produces.
+ */
+function NoteFormatSection({ tenant }: { tenant: Tenant }) {
+  const queryClient = useQueryClient();
+  const toast = useToast();
+  const [expanded, setExpanded] = useState<string | null>(null);
+
+  const { data } = useQuery({
+    queryKey: ['note-preview', tenant.id],
+    queryFn: () => getNotePreview(tenant.id).then((r) => r.data),
+  });
+
+  const choose = useMutation({
+    mutationFn: (format: string) => updateTenant(tenant.id, { noteFormat: format }),
+    onSuccess: (_res, format) => {
+      void queryClient.invalidateQueries({ queryKey: ['tenants'] });
+      void queryClient.invalidateQueries({ queryKey: ['note-preview'] });
+      toast.success(`Notes will be posted as ${format}`);
+    },
+    onError: (err) => toast.error(errorMessage(err, 'Could not change the note format')),
+  });
+
+  const current = tenant.noteFormat ?? 'plain';
+
+  return (
+    <section className="border-t border-slate-200 pt-6 dark:border-slate-800">
+      <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Internal note format</h2>
+      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+        How the proposal is written into the ticket. Plain text is the safe default because it reads
+        correctly even where the PSA renders nothing. If your SuperOps notes are a rich-text field, paste a
+        preview below into a test ticket to see which one it renders, then pick that.
+      </p>
+
+      <div className="mt-4 space-y-2">
+        {(data?.formats ?? []).map((format) => (
+          <div key={format.id} className="card overflow-hidden">
+            <div className="flex flex-wrap items-center gap-3 p-3">
+              <label className="flex flex-1 cursor-pointer items-center gap-2.5">
+                <input
+                  type="radio"
+                  name="noteFormat"
+                  checked={current === format.id}
+                  onChange={() => choose.mutate(format.id)}
+                  disabled={choose.isPending}
+                  className="accent-swoop-600"
+                />
+                <span>
+                  <span className="block text-sm font-medium text-slate-800 dark:text-slate-200">
+                    {format.label}
+                  </span>
+                  <span className="block text-xs text-slate-500 dark:text-slate-400">
+                    {format.description}
+                  </span>
+                </span>
+              </label>
+              <button
+                type="button"
+                onClick={() => setExpanded((open) => (open === format.id ? null : format.id))}
+                className="btn-ghost !py-1 text-xs"
+              >
+                {expanded === format.id ? 'Hide preview' : 'Preview'}
+              </button>
+            </div>
+
+            {expanded === format.id && (
+              <pre className="max-h-72 overflow-auto border-t border-slate-200 bg-slate-50 p-3 font-mono text-[11px] leading-relaxed text-slate-600 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-400">
+                {format.preview}
+              </pre>
+            )}
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 

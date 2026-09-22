@@ -124,7 +124,11 @@ router.get('/', async (req, res) => {
       .select(listColumns)
       .from(actionLogs)
       .where(where)
-      .orderBy(desc(actionLogs.createdAt), desc(actionLogs.id))
+      // createdAt has one-second resolution, so a reclassify lands in the same
+      // second as the row it re-runs. The implicit rowid is insertion order,
+      // which is what "newest first" is meant to mean — ordering by the id
+      // would fall back to comparing random UUIDs.
+      .orderBy(desc(actionLogs.createdAt), sql`rowid DESC`)
       .limit(limit)
       .offset(offset),
     db.select({ total: sql<number>`count(*)` }).from(actionLogs).where(where),
@@ -204,7 +208,7 @@ router.get('/export.csv', async (req, res) => {
     })
     .from(actionLogs)
     .where(where)
-    .orderBy(desc(actionLogs.createdAt))
+    .orderBy(desc(actionLogs.createdAt), sql`rowid DESC`)
     .limit(10_000);
 
   const clientRows = await db.select({ id: clients.id, name: clients.name }).from(clients);

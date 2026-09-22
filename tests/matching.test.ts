@@ -189,9 +189,10 @@ describe('formatProposalNote', () => {
     expect(note).toContain('Out of scope');
   });
 
-  it('calls out high sensitivity', () => {
+  it('calls out high sensitivity as an explicit approval requirement', () => {
     const note = formatProposalNote({ ...base, sensitivity: 'high' }, { mspName: 'MightyIT' });
-    expect(note).toMatch(/requires human approval/i);
+    expect(note).toMatch(/approval/i);
+    expect(note).toMatch(/regardless of confidence/i);
   });
 
   it('says so when running in preview mode', () => {

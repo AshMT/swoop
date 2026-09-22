@@ -118,10 +118,33 @@ export function buildTicketContent(ticket: TicketPromptInput): string {
   return lines.join('\n');
 }
 
-/** Applies a tenant's prompt override, if one is set. */
-export function resolveSystemPrompt(context: PromptContext, override?: string | null): string {
-  const trimmed = override?.trim();
-  return trimmed ? trimmed : buildSystemPrompt(context);
+/**
+ * Picks the prompt for one ticket.
+ *
+ * Most specific wins: a client override, then the tenant override, then the
+ * built-in prompt. A client override replaces the prompt wholesale rather than
+ * being appended, because two prompts concatenated tend to contradict each
+ * other and the model follows whichever it saw last.
+ */
+export function resolveSystemPrompt(
+  context: PromptContext,
+  overrides: { client?: string | null; tenant?: string | null } = {},
+): string {
+  const client = overrides.client?.trim();
+  if (client) return client;
+  const tenant = overrides.tenant?.trim();
+  if (tenant) return tenant;
+  return buildSystemPrompt(context);
+}
+
+/** Which layer supplied the prompt, for the UI and the audit trail. */
+export function promptSource(overrides: {
+  client?: string | null;
+  tenant?: string | null;
+}): 'client' | 'tenant' | 'builtin' {
+  if (overrides.client?.trim()) return 'client';
+  if (overrides.tenant?.trim()) return 'tenant';
+  return 'builtin';
 }
 
 /** The built-in prompt, for seeding the prompt editor in the UI. */
@@ -149,7 +172,17 @@ export function defaultSystemPromptTemplate(): string {
  * should not fragment the figures. Editing the built-in prompt changes the
  * fingerprint automatically, because the template is what gets hashed.
  */
-export function promptFingerprint(override: string | null | undefined, model: string): string {
-  const template = override?.trim() || defaultSystemPromptTemplate();
+export function promptFingerprint(
+  overrides: { client?: string | null; tenant?: string | null } | string | null | undefined,
+  model: string,
+): string {
+  // Accepts a bare string for the common tenant-only case.
+  const resolved =
+    typeof overrides === 'string' || overrides === null || overrides === undefined
+      ? { tenant: overrides }
+      : overrides;
+
+  const template =
+    resolved.client?.trim() || resolved.tenant?.trim() || defaultSystemPromptTemplate();
   return createHash('sha256').update(`${model}\u0000${template}`).digest('hex').slice(0, 12);
 }

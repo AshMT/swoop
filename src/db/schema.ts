@@ -31,6 +31,8 @@ export const tenants = sqliteTable('tenants', {
   automationPaused: integer('automation_paused', { mode: 'boolean' }).default(false),
   /** Classify and log, but never write a note back to SuperOps. */
   dryRun: integer('dry_run', { mode: 'boolean' }).default(false),
+  /** How the internal note is rendered: 'plain' | 'markdown' | 'html'. */
+  noteFormat: text('note_format').default('plain'),
   /** Operator-tuned replacement for the built-in classifier prompt. */
   systemPromptOverride: text('system_prompt_override'),
   /**
@@ -62,6 +64,11 @@ export const clients = sqliteTable('clients', {
   automationEnabled: integer('automation_enabled', { mode: 'boolean' }).default(false),
   /** Free-text context injected into the prompt, e.g. naming conventions. */
   contextNotes: text('context_notes'),
+  /**
+   * Replaces the tenant prompt entirely for this client's tickets. For a client
+   * whose ticket mix differs enough that shared wording cannot serve both.
+   */
+  systemPromptOverride: text('system_prompt_override'),
   createdAt: integer('created_at').default(sql`(unixepoch())`),
 });
 

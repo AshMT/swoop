@@ -169,6 +169,11 @@ export default function Clients() {
                         {client.contextNotes}
                       </p>
                     )}
+                    {client.systemPromptOverride && (
+                      <Badge tone="info" className="mt-1">
+                        Custom prompt
+                      </Badge>
+                    )}
                   </td>
                   <td className="td font-mono text-xs">
                     {client.superopsCompanyId || (
@@ -240,6 +245,8 @@ function ClientForm({
   const [name, setName] = useState(client?.name ?? '');
   const [companyId, setCompanyId] = useState(client?.superopsCompanyId ?? '');
   const [contextNotes, setContextNotes] = useState(client?.contextNotes ?? '');
+  const [promptOverride, setPromptOverride] = useState(client?.systemPromptOverride ?? '');
+  const [showPrompt, setShowPrompt] = useState(Boolean(client?.systemPromptOverride));
   const [enabled, setEnabled] = useState(client?.automationEnabled ?? false);
   const [error, setError] = useState('');
 
@@ -266,6 +273,7 @@ function ClientForm({
             name: name.trim(),
             superopsCompanyId: companyId.trim() || null,
             contextNotes: contextNotes.trim() || null,
+            systemPromptOverride: promptOverride.trim() || null,
             automationEnabled: enabled,
           })
         : createClient({
@@ -273,6 +281,7 @@ function ClientForm({
             name: name.trim(),
             superopsCompanyId: companyId.trim() || undefined,
             contextNotes: contextNotes.trim() || undefined,
+            systemPromptOverride: promptOverride.trim() || undefined,
             automationEnabled: enabled,
           }),
     onSuccess: onSaved,
@@ -374,6 +383,51 @@ function ClientForm({
             Added to the prompt for this client's tickets. Naming conventions and VIP groups are the two that
             change classifications the most.
           </p>
+        </div>
+
+        {/* Context is the right tool for almost every client; a full prompt
+            override is for the rare one whose ticket mix is genuinely
+            different, so it stays behind a disclosure. */}
+        <div>
+          {!showPrompt ? (
+            <button
+              type="button"
+              onClick={() => setShowPrompt(true)}
+              className="text-xs text-slate-500 underline hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
+            >
+              Use a custom prompt for this client
+            </button>
+          ) : (
+            <>
+              <label className="label">Custom prompt for this client</label>
+              <textarea
+                value={promptOverride}
+                onChange={(e) => setPromptOverride(e.target.value)}
+                rows={8}
+                placeholder="Leave blank to use the tenant prompt from Settings."
+                className="input font-mono text-xs"
+                spellCheck={false}
+              />
+              <p className="hint">
+                Replaces the tenant prompt entirely for this client, rather than being added to it — two
+                prompts stacked together tend to contradict each other. It must still ask for the same JSON
+                shape, and the context notes above are not injected into it. Accuracy for this client is
+                tracked as its own version on the Calibration page.
+              </p>
+              {promptOverride && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPromptOverride('');
+                    setShowPrompt(false);
+                  }}
+                  className="mt-1 text-xs text-slate-500 underline hover:text-slate-700 dark:text-slate-400"
+                >
+                  Remove the custom prompt
+                </button>
+              )}
+            </>
+          )}
         </div>
 
         <Toggle

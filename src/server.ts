@@ -3,7 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import { ConfigError, config, loadConfig } from './config';
 import { createLogger } from './lib/logger';
-import { closeDatabase, initializeDatabase } from './db';
+import { checkDatabase, closeDatabase, initializeDatabase } from './db';
 import { errorHandler, requestLogger, securityHeaders } from './middleware/security';
 import authRoutes from './routes/auth';
 import setupRoutes from './routes/setup';
@@ -11,10 +11,13 @@ import tenantsRoutes from './routes/api/tenants';
 import clientsRoutes from './routes/api/clients';
 import actionsRoutes from './routes/api/actions';
 import systemRoutes from './routes/api/system';
-import { startPoller, stopPoller } from './services/poller';
+import { pollerStatus, startPoller, stopPoller } from './services/poller';
 import { APP_VERSION } from './version';
 
 const log = createLogger('Server');
+
+/** Set by the shutdown handler so /health can report the instance is draining. */
+let shuttingDown = false;
 
 export function createApp(): express.Express {
   const cfg = config();
@@ -49,8 +52,38 @@ export function createApp(): express.Express {
     });
   }
 
+  /**
+   * Container health check.
+   *
+   * This previously returned 200 unconditionally without touching SQLite, so a
+   * container whose database had gone unreadable — corruption, a full volume, a
+   * permissions change — reported healthy and no orchestrator would restart it.
+   * A health check that cannot fail is not a health check.
+   */
   app.get('/health', (_req, res) => {
-    res.json({ status: 'ok', version: APP_VERSION });
+    // Never let a health probe be cached by a proxy sitting in front.
+    res.setHeader('Cache-Control', 'no-store');
+
+    if (shuttingDown) {
+      // Report unhealthy while draining so a load balancer stops sending work
+      // before the process actually goes away.
+      res.status(503).json({ status: 'shutting_down', version: APP_VERSION });
+      return;
+    }
+
+    const database = checkDatabase();
+    if (!database.ok) {
+      log.error(`Health check failed: ${database.error}`);
+      res.status(503).json({ status: 'unhealthy', version: APP_VERSION, error: database.error });
+      return;
+    }
+
+    res.json({
+      status: 'ok',
+      version: APP_VERSION,
+      uptimeSeconds: Math.floor(process.uptime()),
+      poller: pollerStatus().running ? 'running' : 'stopped',
+    });
   });
 
   app.use('/api/auth', authRoutes);
@@ -138,7 +171,6 @@ export function startServer(): void {
   });
 
   // ─── Graceful shutdown ──────────────────────────────────────────────────────
-  let shuttingDown = false;
   const shutdown = async (signal: string) => {
     if (shuttingDown) return;
     shuttingDown = true;

@@ -55,10 +55,17 @@ The image builds and pushes but is private, so `docker pull ghcr.io/ashmt/swoop:
 - [x] **Log retention.** Configurable per tenant, two-stage: bulky text cleared at a third of the window, row deleted at the end. Off by default.
 - [x] **Review keyboard shortcuts.** `?` on the Dashboard. `j`/`k` to move, `y`/`n` to record a verdict and advance, `x` to clear.
 - [x] **Per-ticket concurrency.** A bounded worker pool, 1 to 8, set per tenant. Defaults to 1 so an upgrade does not change how hard an existing install hits its provider.
-- [ ] **Markdown in notes.** Notes are plain text because it is unknown whether SuperOps renders Markdown in them. Check against a real instance; if it does, enrich the format.
-- [ ] **Per-client prompt overrides.** Per-client *context* exists; a full per-client prompt does not.
+- [x] **Note format.** Plain, Markdown or HTML, chosen per tenant and defaulting to plain. Settings renders a worked example of each so you can paste one into a test ticket and see which your PSA renders, rather than guessing.
+- [x] **Per-client prompt overrides.** A client override replaces the tenant prompt for that client's tickets, and carries its own prompt fingerprint so its accuracy is not averaged in with everyone else's.
+- [ ] **Confirm which note format SuperOps renders.** The mechanism is built; the remaining step is a real ticket. Paste each preview from Settings → Behaviour into a test ticket and set the one that renders.
 - [x] **Prompt version on each row.** Each classification is stamped with a fingerprint of the prompt-and-model combination, and the Calibration page scopes to one version and warns when the window spans several.
 - [x] **Accuracy trend.** Daily agreement rate charted against the 90% target and 85% floor.
+
+## Recently closed
+
+- Health check now probes the database. It previously returned 200 unconditionally, so a container whose SQLite file had gone unreadable reported healthy and no orchestrator would restart it.
+- A React error boundary per route, so one bad page no longer white-screens the app and the shell stays usable.
+- Frontend test setup in `web/`, with the error boundary covered.
 
 ## Deferred deliberately
 

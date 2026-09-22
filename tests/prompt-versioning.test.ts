@@ -1,6 +1,12 @@
 import './setup-env';
 import { describe, expect, it } from 'vitest';
-import { buildSystemPrompt, defaultSystemPromptTemplate, promptFingerprint } from '../src/prompts/system';
+import {
+  buildSystemPrompt,
+  defaultSystemPromptTemplate,
+  promptFingerprint,
+  promptSource,
+  resolveSystemPrompt,
+} from '../src/prompts/system';
 
 /**
  * Accuracy figures from different prompts are not comparable, and the failure
@@ -84,5 +90,76 @@ describe('defaultSystemPromptTemplate', () => {
 
   it('tells the model to ignore instructions inside the ticket', () => {
     expect(defaultSystemPromptTemplate()).toMatch(/ignore them/i);
+  });
+});
+
+
+/**
+ * Most specific wins. A client override replaces the prompt wholesale rather
+ * than being appended, because two prompts concatenated tend to contradict
+ * each other and the model follows whichever it saw last.
+ */
+describe('prompt resolution', () => {
+  const context = { mspName: 'MightyIT', clientName: 'Acme' };
+
+  it('falls back to the built-in prompt when nothing is overridden', () => {
+    expect(resolveSystemPrompt(context, {})).toBe(buildSystemPrompt(context));
+    expect(resolveSystemPrompt(context)).toBe(buildSystemPrompt(context));
+  });
+
+  it('uses the tenant override when there is no client one', () => {
+    expect(resolveSystemPrompt(context, { tenant: 'tenant prompt' })).toBe('tenant prompt');
+  });
+
+  it('prefers the client override over the tenant one', () => {
+    expect(resolveSystemPrompt(context, { client: 'client prompt', tenant: 'tenant prompt' })).toBe(
+      'client prompt',
+    );
+  });
+
+  it('replaces rather than appends, so the two cannot contradict each other', () => {
+    const resolved = resolveSystemPrompt(context, { client: 'client prompt', tenant: 'tenant prompt' });
+    expect(resolved).not.toContain('tenant prompt');
+  });
+
+  it('ignores a blank override at either layer', () => {
+    expect(resolveSystemPrompt(context, { client: '   ', tenant: 'tenant prompt' })).toBe('tenant prompt');
+    expect(resolveSystemPrompt(context, { client: '', tenant: '  ' })).toBe(buildSystemPrompt(context));
+  });
+
+  it('reports which layer supplied the prompt', () => {
+    expect(promptSource({})).toBe('builtin');
+    expect(promptSource({ tenant: 't' })).toBe('tenant');
+    expect(promptSource({ client: 'c', tenant: 't' })).toBe('client');
+    expect(promptSource({ client: '  ', tenant: 't' })).toBe('tenant');
+  });
+});
+
+describe('promptFingerprint with a client override', () => {
+  it('distinguishes a client override from the tenant prompt', () => {
+    expect(promptFingerprint({ client: 'client prompt', tenant: 't' }, 'm')).not.toBe(
+      promptFingerprint({ tenant: 't' }, 'm'),
+    );
+  });
+
+  it('matches the tenant fingerprint when the client has no override', () => {
+    expect(promptFingerprint({ client: null, tenant: 'tenant prompt' }, 'm')).toBe(
+      promptFingerprint('tenant prompt', 'm'),
+    );
+  });
+
+  it('still accepts a bare string for the tenant-only case', () => {
+    expect(promptFingerprint('tenant prompt', 'm')).toBe(promptFingerprint({ tenant: 'tenant prompt' }, 'm'));
+    expect(promptFingerprint(null, 'm')).toBe(promptFingerprint({}, 'm'));
+  });
+
+  /**
+   * Two clients on different prompts must not have their accuracy averaged
+   * together — that is the whole point of the fingerprint.
+   */
+  it('gives two clients with different overrides different fingerprints', () => {
+    expect(promptFingerprint({ client: 'prompt for Acme' }, 'm')).not.toBe(
+      promptFingerprint({ client: 'prompt for Beta' }, 'm'),
+    );
   });
 });

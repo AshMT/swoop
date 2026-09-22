@@ -1,7 +1,7 @@
 {
   "name": "swoop",
   "version": "1.0.0",
-  "description": "Open source AI ticket triage for MSPs — classifies PSA tickets and proposes actions, read-only by default",
+  "description": "Open source AI ticket triage for MSPs \u2014 classifies PSA tickets and proposes actions, read-only by default",
   "private": true,
   "scripts": {
     "dev": "tsx watch src/server.ts",
@@ -16,8 +16,10 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "typecheck": "tsc -p tsconfig.build.json --noEmit && cd web && tsc --noEmit",
-    "check": "npm run lint && npm run typecheck && npm run test",
-    "db:studio": "drizzle-kit studio"
+    "check": "npm run lint && npm run typecheck && npm run test:all",
+    "db:studio": "drizzle-kit studio",
+    "test:web": "npm run test --prefix web",
+    "test:all": "npm run test && npm run test:web"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

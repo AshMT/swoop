@@ -3,11 +3,19 @@ import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  { ignores: ['dist/**', 'node_modules/**', 'web/dist/**', 'web/node_modules/**', 'coverage/**'] },
+  {
+    ignores: [
+      'dist/**',
+      'node_modules/**',
+      'web/dist/**',
+      'web/node_modules/**',
+      'coverage/**',
+    ],
+  },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    files: ['src/**/*.ts', 'tests/**/*.ts'],
+    files: ['src/**/*.ts', 'tests/**/*.ts', 'web/src/**/*.{ts,tsx}'],
     languageOptions: {
       parserOptions: { ecmaVersion: 2022, sourceType: 'module' },
       globals: { console: 'readonly', process: 'readonly', Buffer: 'readonly', __dirname: 'readonly' },
@@ -25,7 +33,7 @@ export default tseslint.config(
   },
   {
     // Test files legitimately reach into internals and re-declare fixtures.
-    files: ['tests/**/*.ts'],
+    files: ['tests/**/*.ts', 'web/src/**/*.test.{ts,tsx}'],
     rules: { '@typescript-eslint/no-non-null-assertion': 'off' },
   },
 );

@@ -59,6 +59,22 @@ export function initializeDatabase(): void {
   }
 }
 
+/**
+ * Cheap liveness probe for the health endpoint.
+ *
+ * Deliberately touches a real table rather than running `SELECT 1`: the latter
+ * answers even when the database file is unreadable or the schema was never
+ * created, which is exactly the failure a health check exists to catch.
+ */
+export function checkDatabase(): { ok: true } | { ok: false; error: string } {
+  try {
+    connect().sqlite.prepare('SELECT COUNT(*) AS n FROM schema_migrations').get();
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : 'database unreachable' };
+  }
+}
+
 export function closeDatabase(): void {
   if (!sqlite) return;
   try {

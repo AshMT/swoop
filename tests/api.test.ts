@@ -2,6 +2,7 @@ import './setup-env';
 import { beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import type { Express } from 'express';
+import { eq } from 'drizzle-orm';
 
 let app: Express;
 let token = '';
@@ -208,6 +209,43 @@ describe('action log and calibration', () => {
     expect(res.text).toContain('review_verdict');
   });
 
+  /**
+   * createdAt has one-second resolution, so a reclassify lands in the same
+   * second as the row it re-runs. Ordering previously fell back to the id,
+   * which is a random UUID — so "newest first" was a coin flip, and the
+   * reclassify toast's promise that the result is at the top was often false.
+   */
+  it('orders same-second rows by insertion, not by random UUID', async () => {
+    const { db } = await import('../src/db');
+    const { actionLogs } = await import('../src/db/schema');
+    const { randomUUID } = await import('crypto');
+
+    const second = Math.floor(Date.now() / 1000);
+    const inserted: string[] = [];
+    for (let i = 0; i < 6; i++) {
+      const id = randomUUID();
+      inserted.push(id);
+      await db.insert(actionLogs).values({
+        id,
+        tenantId,
+        ticketId: `ORDER-${i}`,
+        ticketSubject: `ordering probe ${i}`,
+        classification: 'ESCALATE',
+        status: 'classified',
+        createdAt: second,
+      });
+    }
+
+    const res = await auth(request(app).get('/api/actions').query({ q: 'ordering probe' })).expect(200);
+    const returned = res.body.items.map((item: { id: string }) => item.id);
+    // Newest first means the last one written comes back first.
+    expect(returned).toEqual([...inserted].reverse());
+
+    for (const id of inserted) {
+      await db.delete(actionLogs).where(eq(actionLogs.id, id));
+    }
+  });
+
   it('404s an unknown action log', async () => {
     await auth(request(app).get('/api/actions/00000000-0000-0000-0000-000000000000')).expect(404);
   });
@@ -295,5 +333,54 @@ describe('system status', () => {
 
   it('requires authentication', async () => {
     await request(app).get('/api/system/status').expect(401);
+  });
+});
+
+/**
+ * The container HEALTHCHECK wires to this endpoint, so it has to be capable of
+ * failing. It previously returned 200 unconditionally without touching SQLite,
+ * which meant a container with an unreadable database reported healthy and no
+ * orchestrator would ever restart it.
+ */
+describe('health check', () => {
+  it('reports ok and the poller state when the database responds', async () => {
+    const res = await request(app).get('/health').expect(200);
+    expect(res.body.status).toBe('ok');
+    expect(res.body.version).toBeTruthy();
+    expect(res.body.poller).toMatch(/running|stopped/);
+    expect(typeof res.body.uptimeSeconds).toBe('number');
+  });
+
+  it('is never cached by a proxy in front', async () => {
+    const res = await request(app).get('/health').expect(200);
+    expect(res.headers['cache-control']).toBe('no-store');
+  });
+
+  it('needs no authentication', async () => {
+    await request(app).get('/health').expect(200);
+  });
+
+  /**
+   * Breaks the database for real rather than mocking the probe, because the
+   * thing worth proving is that a genuinely unreadable database produces a
+   * failing status code — not that a stub can be made to return one.
+   */
+  it('returns 503 when the database cannot be read', async () => {
+    const { getSqlite } = await import('../src/db');
+    const sqlite = getSqlite();
+
+    sqlite.exec('ALTER TABLE schema_migrations RENAME TO schema_migrations_hidden');
+    try {
+      const res = await request(app).get('/health').expect(503);
+      expect(res.body.status).toBe('unhealthy');
+      expect(res.body.error).toBeTruthy();
+      // The version still comes back, so an operator can tell which build failed.
+      expect(res.body.version).toBeTruthy();
+    } finally {
+      sqlite.exec('ALTER TABLE schema_migrations_hidden RENAME TO schema_migrations');
+    }
+
+    // And recovers once the database is readable again.
+    await request(app).get('/health').expect(200);
   });
 });

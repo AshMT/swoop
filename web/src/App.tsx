@@ -3,6 +3,7 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { getSetupStatus, getToken } from './api';
 import { applyTheme, readTheme, watchSystemTheme } from './lib/theme';
 import Layout from './components/Layout';
+import ErrorBoundary from './components/ErrorBoundary';
 import { LoadingState, ToastProvider } from './components/ui';
 import Login from './pages/Login';
 import Setup from './pages/Setup';
@@ -75,8 +76,9 @@ export default function App() {
   };
 
   return (
-    <ToastProvider>
-      <BrowserRouter>
+    <ErrorBoundary>
+      <ToastProvider>
+        <BrowserRouter>
         <Routes>
           <Route
             path="/setup"
@@ -91,14 +93,45 @@ export default function App() {
           <Route path="/login" element={token ? <Navigate to="/dashboard" replace /> : <Login />} />
           <Route path="/" element={guard(<Navigate to="/dashboard" replace />)} />
           <Route element={guard(<Layout />)}>
-            <Route path="/dashboard" element={<Dashboard />} />
-            <Route path="/calibration" element={<Calibration />} />
-            <Route path="/clients" element={<Clients />} />
-            <Route path="/settings" element={<Settings />} />
+            {/* Boundaries sit inside the layout so a failing page keeps the
+                navigation, the health banner and the theme toggle usable. */}
+            <Route
+              path="/dashboard"
+              element={
+                <ErrorBoundary label="The dashboard">
+                  <Dashboard />
+                </ErrorBoundary>
+              }
+            />
+            <Route
+              path="/calibration"
+              element={
+                <ErrorBoundary label="The calibration report">
+                  <Calibration />
+                </ErrorBoundary>
+              }
+            />
+            <Route
+              path="/clients"
+              element={
+                <ErrorBoundary label="The client list">
+                  <Clients />
+                </ErrorBoundary>
+              }
+            />
+            <Route
+              path="/settings"
+              element={
+                <ErrorBoundary label="Settings">
+                  <Settings />
+                </ErrorBoundary>
+              }
+            />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </BrowserRouter>
-    </ToastProvider>
+          </Routes>
+        </BrowserRouter>
+      </ToastProvider>
+    </ErrorBoundary>
   );
 }

@@ -78,6 +78,8 @@ An open source AI triage agent for MSPs. It reads tickets from a PSA, classifies
 
 **Policy is separate from parsing.** The stored log holds what the model actually said; the confidence floor and grounding are applied afterwards and recorded as explicit adjustments, so a disagreement can be traced to either the model or the policy.
 
+**The note format is a setting, not a guess.** Whether a PSA renders Markdown or HTML in a note cannot be settled from outside a real instance, and guessing wrong is visible to every technician on every ticket. The note is built once as a structure and rendered into the chosen format, so the three renderers cannot drift apart, and Settings shows a worked example of each.
+
 **Accuracy is scoped to a prompt version.** Figures from different prompts are not comparable, and the failure mode is silent: tune the prompt to fix a confusion pair, and the agreement rate afterwards averages over both versions, so the improvement is invisible until enough new tickets dilute the old ones. Each row carries a fingerprint of the prompt-and-model combination. The fingerprint covers the template rather than the rendered prompt, so per-client context does not fragment the figures.
 
 **Fail to start rather than start insecurely.** `JWT_SECRET` used to default to `change-me-in-production`, which meant anyone could mint a valid session for any install running the default. In production Swoop now validates its configuration and exits with a list of what is wrong.
@@ -109,6 +111,9 @@ An open source AI triage agent for MSPs. It reads tickets from a PSA, classifies
       failure does not cost a second AI call
 - [x] Client discovery from the PSA, so company IDs need not be typed by hand
 - [x] Two-stage log retention, off by default
+- [x] Note rendered as plain text, Markdown or HTML from one shared structure,
+      with a worked preview of each
+- [x] Per-client prompt overrides, fingerprinted separately
 - [x] Bounded per-ticket concurrency, so a slow local model does not serialise
       a morning's backlog
 
@@ -135,7 +140,7 @@ An open source AI triage agent for MSPs. It reads tickets from a PSA, classifies
 - [x] Levelled logging with secret redaction, optional JSON output
 - [x] Graceful shutdown that lets the in-flight cycle finish
 - [x] Poll health and discovered-schema diagnostics surfaced in the UI
-- [x] 238 tests, ESLint, CI gating the Docker publish on lint + typecheck + test + boot check
+- [x] 285 tests across backend and frontend, ESLint, CI gating the Docker publish on lint + typecheck + test + boot check
 - [x] Non-root container, build toolchain dropped from the runtime image
 
 ### Validation still outstanding

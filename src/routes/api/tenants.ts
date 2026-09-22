@@ -11,6 +11,7 @@ import { createPsaClient } from '../../services/psa/factory';
 import { runTenantCycle } from '../../services/poller';
 import { describeLogStorage, pruneTenantLogs } from '../../services/retention';
 import { defaultSystemPromptTemplate } from '../../prompts/system';
+import { formatProposalNote, NOTE_FORMATS, isNoteFormat } from '../../services/note-format';
 import { describeError } from '../../lib/logger';
 import type { PublicTenant, Tenant } from '../../types';
 
@@ -59,6 +60,7 @@ const updateSchema = z.object({
   confidenceThreshold: z.number().min(0).max(1).optional(),
   automationPaused: z.boolean().optional(),
   dryRun: z.boolean().optional(),
+  noteFormat: z.enum(['plain', 'markdown', 'html']).optional(),
   systemPromptOverride: z.string().max(20_000).nullable().optional(),
   // 0 keeps everything; the cap is ten years.
   logRetentionDays: z.number().int().min(0).max(3650).optional(),
@@ -250,6 +252,53 @@ router.post(
     res.json({ ok: true, ...(await pruneTenantLogs(tenant)) });
   },
 );
+
+/**
+ * Renders a worked example of the internal note in each format.
+ *
+ * Whether a PSA renders Markdown or HTML in a note cannot be settled from
+ * outside a real instance, so rather than guess, show the operator exactly
+ * what each option produces and let them paste one into a test ticket.
+ */
+router.get('/:id/note-preview', async (req, res) => {
+  const [tenant] = await db
+    .select({ name: tenants.name, noteFormat: tenants.noteFormat, dryRun: tenants.dryRun })
+    .from(tenants)
+    .where(eq(tenants.id, req.params.id))
+    .limit(1);
+  if (!tenant) {
+    res.status(404).json({ error: 'Tenant not found' });
+    return;
+  }
+
+  const sample = {
+    classification: 'password_reset',
+    confidence: 0.94,
+    sensitivity: 'normal' as const,
+    entities: {
+      target_user_email: 'sarah.jones@acme.com',
+      target_user_display_name: 'Sarah Jones',
+      group_name: null,
+      license_sku: null,
+    },
+    reasoning: 'Explicit password reset request naming the user by email address.',
+    follow_up_question: null,
+    escalation_reason: null,
+    proposed_psa_note: 'Reset the password for sarah.jones@acme.com and send the temporary credential via the agreed channel.',
+  };
+
+  res.json({
+    current: isNoteFormat(tenant.noteFormat) ? tenant.noteFormat : 'plain',
+    formats: NOTE_FORMATS.map((format) => ({
+      ...format,
+      preview: formatProposalNote(sample, {
+        mspName: tenant.name,
+        dryRun: Boolean(tenant.dryRun),
+        format: format.id,
+      }),
+    })),
+  });
+});
 
 /** The built-in prompt, so the editor can show it and offer a reset. */
 router.get('/:id/default-prompt', (_req, res) => {
