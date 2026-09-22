@@ -57,7 +57,29 @@ export interface CalibrationReport {
   avgConfidenceWhenIncorrect: number | null;
   latency: { p50: number | null; p95: number | null; avg: number | null };
   noteDelivery: { posted: number; failed: number };
-  daily: Array<{ date: string; total: number; reviewed: number; correct: number }>;
+  daily: Array<{
+    date: string;
+    total: number;
+    reviewed: number;
+    correct: number;
+    /** correct / reviewed for the day, or null if nothing was reviewed. */
+    agreement: number | null;
+  }>;
+  /**
+   * Prompt-and-model versions present in this window, newest first. More than
+   * one means the headline agreement rate averages over prompts that are not
+   * comparable, which is worth saying out loud.
+   */
+  promptVersions: Array<{
+    fingerprint: string | null;
+    total: number;
+    reviewed: number;
+    correct: number;
+    agreement: number | null;
+    model: string | null;
+    firstSeenAt: number | null;
+    lastSeenAt: number | null;
+  }>;
 }
 
 /** Below this many reviews, an agreement percentage is noise. */
@@ -68,6 +90,8 @@ export interface MetricsQuery {
   clientId?: string;
   /** Restrict to logs newer than this many days. */
   days?: number;
+  /** Restrict to one prompt-and-model version. */
+  promptFingerprint?: string;
 }
 
 function buildConditions(query: MetricsQuery) {
@@ -77,6 +101,9 @@ function buildConditions(query: MetricsQuery) {
   if (query.days && query.days > 0) {
     const cutoff = Math.floor(Date.now() / 1000) - query.days * 86400;
     conditions.push(gte(actionLogs.createdAt, cutoff));
+  }
+  if (query.promptFingerprint) {
+    conditions.push(eq(actionLogs.promptFingerprint, query.promptFingerprint));
   }
   return conditions.length > 0 ? and(...conditions) : undefined;
 }
@@ -95,6 +122,8 @@ export async function buildCalibrationReport(query: MetricsQuery = {}): Promise<
       latencyMs: actionLogs.aiLatencyMs,
       notePosted: actionLogs.notePosted,
       createdAt: actionLogs.createdAt,
+      promptFingerprint: actionLogs.promptFingerprint,
+      aiModel: actionLogs.aiModel,
     })
     .from(actionLogs)
     .where(where);
@@ -179,7 +208,7 @@ export async function buildCalibrationReport(query: MetricsQuery = {}): Promise<
     .filter((v): v is number => typeof v === 'number' && v > 0)
     .sort((a, b) => a - b);
 
-  // ─── Daily volume ───────────────────────────────────────────────────────────
+  // ─── Daily volume and agreement ─────────────────────────────────────────────
   const dailyMap = new Map<string, { total: number; reviewed: number; correct: number }>();
   for (const row of classified) {
     if (!row.createdAt) continue;
@@ -191,8 +220,54 @@ export async function buildCalibrationReport(query: MetricsQuery = {}): Promise<
     dailyMap.set(date, bucket);
   }
   const daily = [...dailyMap.entries()]
-    .map(([date, value]) => ({ date, ...value }))
+    .map(([date, value]) => ({
+      date,
+      ...value,
+      agreement: value.reviewed > 0 ? value.correct / value.reviewed : null,
+    }))
     .sort((a, b) => a.date.localeCompare(b.date));
+
+  // ─── Prompt versions ────────────────────────────────────────────────────────
+  const versionMap = new Map<
+    string,
+    {
+      fingerprint: string | null;
+      total: number;
+      reviewed: number;
+      correct: number;
+      model: string | null;
+      firstSeenAt: number | null;
+      lastSeenAt: number | null;
+    }
+  >();
+  for (const row of classified) {
+    const key = row.promptFingerprint ?? '';
+    const bucket =
+      versionMap.get(key) ??
+      {
+        fingerprint: row.promptFingerprint ?? null,
+        total: 0,
+        reviewed: 0,
+        correct: 0,
+        model: row.aiModel ?? null,
+        firstSeenAt: row.createdAt ?? null,
+        lastSeenAt: row.createdAt ?? null,
+      };
+    bucket.total++;
+    if (row.reviewVerdict === 'correct' || row.reviewVerdict === 'incorrect') bucket.reviewed++;
+    if (row.reviewVerdict === 'correct') bucket.correct++;
+    if (row.createdAt) {
+      bucket.firstSeenAt = Math.min(bucket.firstSeenAt ?? row.createdAt, row.createdAt);
+      bucket.lastSeenAt = Math.max(bucket.lastSeenAt ?? row.createdAt, row.createdAt);
+    }
+    versionMap.set(key, bucket);
+  }
+  const promptVersions = [...versionMap.values()]
+    .map((bucket) => ({
+      ...bucket,
+      agreement: bucket.reviewed > 0 ? bucket.correct / bucket.reviewed : null,
+    }))
+    .sort((a, b) => (b.lastSeenAt ?? 0) - (a.lastSeenAt ?? 0));
 
   return {
     totalClassified: classified.length,
@@ -220,6 +295,7 @@ export async function buildCalibrationReport(query: MetricsQuery = {}): Promise<
       failed: classified.filter((r) => !r.notePosted).length,
     },
     daily,
+    promptVersions,
   };
 }
 

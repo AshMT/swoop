@@ -199,6 +199,28 @@ export const migrations: Migration[] = [
       addColumnIfMissing(db, 'tenants', 'log_retention_days', 'INTEGER DEFAULT 0');
     },
   },
+
+  {
+    id: '007_prompt_fingerprint',
+    up: (db) => {
+      addColumnIfMissing(db, 'action_logs', 'prompt_fingerprint', 'TEXT');
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS action_logs_prompt_idx
+          ON action_logs (prompt_fingerprint);
+      `);
+      // Existing rows predate the stamp. Leaving them NULL is honest — they
+      // are from an unknown prompt version, and the UI says so.
+    },
+  },
+
+  {
+    id: '008_classify_concurrency',
+    up: (db) => {
+      // Defaults to 1 so an upgrade does not change how hard an existing
+      // install hits its AI provider without the operator asking for it.
+      addColumnIfMissing(db, 'tenants', 'classify_concurrency', 'INTEGER DEFAULT 1');
+    },
+  },
 ];
 
 /**

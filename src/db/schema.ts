@@ -24,6 +24,8 @@ export const tenants = sqliteTable('tenants', {
 
   // ─── Operator controls ──────────────────────────────────────────────────────
   pollIntervalSeconds: integer('poll_interval_seconds').default(60),
+  /** Tickets classified in parallel. 1 keeps the old sequential behaviour. */
+  classifyConcurrency: integer('classify_concurrency').default(1),
   confidenceThreshold: real('confidence_threshold').default(0.75),
   /** Master switch — pauses classification without touching per-client toggles. */
   automationPaused: integer('automation_paused', { mode: 'boolean' }).default(false),
@@ -93,6 +95,11 @@ export const actionLogs = sqliteTable(
     errorMessage: text('error_message'),
 
     aiModel: text('ai_model'),
+    /**
+     * Identifies the prompt-and-model combination that produced this row, so
+     * accuracy figures from different prompts are not silently averaged.
+     */
+    promptFingerprint: text('prompt_fingerprint'),
     aiLatencyMs: integer('ai_latency_ms'),
     promptTokens: integer('prompt_tokens'),
     completionTokens: integer('completion_tokens'),
@@ -116,6 +123,7 @@ export const actionLogs = sqliteTable(
     ticketIdx: index('action_logs_ticket_idx').on(table.ticketId),
     reviewIdx: index('action_logs_review_idx').on(table.reviewVerdict),
     noteRetryIdx: index('action_logs_note_retry_idx').on(table.status, table.noteAttempts),
+    promptIdx: index('action_logs_prompt_idx').on(table.promptFingerprint),
   }),
 );
 

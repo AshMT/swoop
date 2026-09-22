@@ -3,7 +3,13 @@ import { config } from '../config';
 import { decrypt } from './crypto';
 import { extractJsonObject } from '../lib/json-extract';
 import { canonicaliseAction } from '../domain/classifications';
-import { resolveSystemPrompt, buildTicketContent, type PromptContext, type TicketPromptInput } from '../prompts/system';
+import {
+  resolveSystemPrompt,
+  buildTicketContent,
+  promptFingerprint,
+  type PromptContext,
+  type TicketPromptInput,
+} from '../prompts/system';
 import { createLogger, describeError } from '../lib/logger';
 import type { AiClassification, Tenant } from '../types';
 
@@ -51,6 +57,8 @@ export interface ClassificationResult {
   classification: AiClassification;
   rawResponse: string;
   model: string;
+  /** Identifies the prompt-and-model combination, for calibration scoping. */
+  promptFingerprint: string;
   latencyMs: number;
   promptTokens: number | null;
   completionTokens: number | null;
@@ -103,6 +111,7 @@ export async function classifyTicket(
   const systemPrompt = resolveSystemPrompt(context, tenant.systemPromptOverride);
   const userPrompt = buildTicketContent(ticket);
 
+  const fingerprint = promptFingerprint(tenant.systemPromptOverride, aiConfig.model);
   const started = Date.now();
   let lastError: AiError | null = null;
 
@@ -143,6 +152,7 @@ export async function classifyTicket(
         classification: parsed.value,
         rawResponse: raw,
         model: aiConfig.model,
+        promptFingerprint: fingerprint,
         latencyMs: Date.now() - started,
         promptTokens: usage?.prompt_tokens ?? null,
         completionTokens: usage?.completion_tokens ?? null,

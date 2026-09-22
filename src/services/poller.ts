@@ -12,6 +12,7 @@ import { formatProposalNote } from './note-format';
 import { matchTicketToClient, emptySummary, type PollSummary } from './matching';
 import { pruneAllTenants } from './retention';
 import { createLogger, describeError } from '../lib/logger';
+import { runPool } from '../lib/pool';
 import type { Client, Tenant } from '../types';
 
 const log = createLogger('Poller');
@@ -127,6 +128,16 @@ async function reconcile(): Promise<void> {
   }
 }
 
+/**
+ * Concurrency is capped at 8: past that the bottleneck is the provider, and a
+ * wide pool against a local model just queues requests inside Ollama while
+ * holding more tickets in an unfinished state if the process dies.
+ */
+function clampConcurrency(value: number | null): number {
+  if (!value || value < 1) return 1;
+  return Math.min(Math.floor(value), 8);
+}
+
 function clampInterval(seconds: number | null): number {
   const fallback = config().defaultPollIntervalSeconds;
   const value = seconds && seconds > 0 ? seconds : fallback;
@@ -234,10 +245,16 @@ export async function runTenantCycle(tenant: Tenant): Promise<PollSummary> {
     const retryable = await loadRetryableTickets(tenant.id);
     const retrySet = new Set(retryable);
 
-    for (const ticket of tickets) {
-      if (!running) break;
-      await processTicket(ticket, tenant, enabledClients, psa, summary, retrySet);
-    }
+    // Tickets are independent of each other: each claims its own ledger row
+    // before any slow work, so running several at once cannot double-process.
+    await runPool(
+      tickets,
+      (ticket) => processTicket(ticket, tenant, enabledClients, psa, summary, retrySet),
+      {
+        concurrency: clampConcurrency(tenant.classifyConcurrency),
+        shouldContinue: () => running,
+      },
+    );
 
     // Only advance the watermark once the fetch succeeded, so a failed poll
     // does not skip the window it never actually read.
@@ -478,6 +495,7 @@ async function processTicket(
     status: noteError ? 'note_failed' : 'classified',
     errorMessage: noteError,
     aiModel: result.model,
+    promptFingerprint: result.promptFingerprint,
     aiLatencyMs: result.latencyMs,
     promptTokens: result.promptTokens,
     completionTokens: result.completionTokens,
@@ -723,6 +741,7 @@ export async function reclassifyTicket(
     status: noteError ? 'note_failed' : 'classified',
     errorMessage: noteError,
     aiModel: result.model,
+    promptFingerprint: result.promptFingerprint,
     aiLatencyMs: result.latencyMs,
     promptTokens: result.promptTokens,
     completionTokens: result.completionTokens,

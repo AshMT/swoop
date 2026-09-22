@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { ACTION_TYPES } from '../domain/classifications';
 import { truncateForPrompt } from '../lib/html';
 
@@ -130,4 +131,25 @@ export function defaultSystemPromptTemplate(): string {
     clientName: '{{clientName}}',
     confidenceThreshold: 0.75,
   });
+}
+
+/**
+ * A short, stable identifier for the prompt-and-model combination a
+ * classification was produced by.
+ *
+ * Accuracy numbers from different prompts are not comparable, and the failure
+ * mode is silent: tune the prompt to fix a confusion pair, and the agreement
+ * rate afterwards is an average over both versions, so the improvement is
+ * invisible until enough new tickets dilute the old ones. Stamping each row
+ * lets the Calibration page scope to one version and say when the log spans
+ * more than one.
+ *
+ * Fingerprints the prompt *template*, not the rendered prompt: the MSP and
+ * client names are substitutions, not semantic changes, and per-client context
+ * should not fragment the figures. Editing the built-in prompt changes the
+ * fingerprint automatically, because the template is what gets hashed.
+ */
+export function promptFingerprint(override: string | null | undefined, model: string): string {
+  const template = override?.trim() || defaultSystemPromptTemplate();
+  return createHash('sha256').update(`${model}\u0000${template}`).digest('hex').slice(0, 12);
 }

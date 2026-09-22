@@ -54,11 +54,11 @@ The image builds and pushes but is private, so `docker pull ghcr.io/ashmt/swoop:
 - [x] **Retry the note, not just the classification.** A classification whose note failed to post is retried on later cycles, up to five attempts, without repeating the AI call.
 - [x] **Log retention.** Configurable per tenant, two-stage: bulky text cleared at a third of the window, row deleted at the end. Off by default.
 - [x] **Review keyboard shortcuts.** `?` on the Dashboard. `j`/`k` to move, `y`/`n` to record a verdict and advance, `x` to clear.
-- [ ] **Per-ticket concurrency.** The cycle is sequential, so a slow local model on a busy desk lags behind. Add a small worker pool with a configurable width.
+- [x] **Per-ticket concurrency.** A bounded worker pool, 1 to 8, set per tenant. Defaults to 1 so an upgrade does not change how hard an existing install hits its provider.
 - [ ] **Markdown in notes.** Notes are plain text because it is unknown whether SuperOps renders Markdown in them. Check against a real instance; if it does, enrich the format.
 - [ ] **Per-client prompt overrides.** Per-client *context* exists; a full per-client prompt does not.
-- [ ] **Prompt version on each row.** When the prompt changes, older rows become incomparable. Stamp a prompt hash on each classification so the Calibration page can scope to one version.
-- [ ] **Accuracy trend.** Daily volume is charted; agreement rate over time is not.
+- [x] **Prompt version on each row.** Each classification is stamped with a fingerprint of the prompt-and-model combination, and the Calibration page scopes to one version and warns when the window spans several.
+- [x] **Accuracy trend.** Daily agreement rate charted against the 90% target and 85% floor.
 
 ## Deferred deliberately
 

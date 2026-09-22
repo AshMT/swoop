@@ -78,6 +78,8 @@ An open source AI triage agent for MSPs. It reads tickets from a PSA, classifies
 
 **Policy is separate from parsing.** The stored log holds what the model actually said; the confidence floor and grounding are applied afterwards and recorded as explicit adjustments, so a disagreement can be traced to either the model or the policy.
 
+**Accuracy is scoped to a prompt version.** Figures from different prompts are not comparable, and the failure mode is silent: tune the prompt to fix a confusion pair, and the agreement rate afterwards averages over both versions, so the improvement is invisible until enough new tickets dilute the old ones. Each row carries a fingerprint of the prompt-and-model combination. The fingerprint covers the template rather than the rendered prompt, so per-client context does not fragment the figures.
+
 **Fail to start rather than start insecurely.** `JWT_SECRET` used to default to `change-me-in-production`, which meant anyone could mint a valid session for any install running the default. In production Swoop now validates its configuration and exits with a list of what is wrong.
 
 **Polling, not webhooks.** Webhooks need a publicly reachable endpoint. Polling is simpler, needs no inbound network, and is sufficient. The interval is per-tenant and adjustable from the UI.
@@ -107,6 +109,8 @@ An open source AI triage agent for MSPs. It reads tickets from a PSA, classifies
       failure does not cost a second AI call
 - [x] Client discovery from the PSA, so company IDs need not be typed by hand
 - [x] Two-stage log retention, off by default
+- [x] Bounded per-ticket concurrency, so a slow local model does not serialise
+      a morning's backlog
 
 ### Calibration
 - [x] Per-classification review: correct / incorrect plus the correct label and a note
@@ -118,6 +122,9 @@ An open source AI triage agent for MSPs. It reads tickets from a PSA, classifies
 - [x] Latency percentiles, note delivery, daily volume
 - [x] CSV export of the full log
 - [x] Keyboard shortcuts for the review queue
+- [x] Prompt-and-model fingerprint on every row, so tuning the prompt does not
+      silently average the new figures in with the old ones
+- [x] Agreement trend against the target
 
 ### Platform
 - [x] Validated configuration that refuses to boot insecurely
@@ -128,7 +135,7 @@ An open source AI triage agent for MSPs. It reads tickets from a PSA, classifies
 - [x] Levelled logging with secret redaction, optional JSON output
 - [x] Graceful shutdown that lets the in-flight cycle finish
 - [x] Poll health and discovered-schema diagnostics surfaced in the UI
-- [x] 217 tests, ESLint, CI gating the Docker publish on lint + typecheck + test + boot check
+- [x] 238 tests, ESLint, CI gating the Docker publish on lint + typecheck + test + boot check
 - [x] Non-root container, build toolchain dropped from the runtime image
 
 ### Validation still outstanding

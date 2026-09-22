@@ -68,6 +68,7 @@ export interface Tenant {
   aiModel: string | null;
   lastPolledAt: number | null;
   pollIntervalSeconds: number | null;
+  classifyConcurrency: number | null;
   confidenceThreshold: number | null;
   automationPaused: boolean | null;
   dryRun: boolean | null;
@@ -119,6 +120,7 @@ export interface ActionLog {
   status: string | null;
   errorMessage: string | null;
   aiModel: string | null;
+  promptFingerprint?: string | null;
   aiLatencyMs: number | null;
   notePosted: boolean | null;
   noteError: string | null;
@@ -178,7 +180,23 @@ export interface CalibrationReport {
   avgConfidenceWhenIncorrect: number | null;
   latency: { p50: number | null; p95: number | null; avg: number | null };
   noteDelivery: { posted: number; failed: number };
-  daily: Array<{ date: string; total: number; reviewed: number; correct: number }>;
+  daily: Array<{
+    date: string;
+    total: number;
+    reviewed: number;
+    correct: number;
+    agreement: number | null;
+  }>;
+  promptVersions: Array<{
+    fingerprint: string | null;
+    total: number;
+    reviewed: number;
+    correct: number;
+    agreement: number | null;
+    model: string | null;
+    firstSeenAt: number | null;
+    lastSeenAt: number | null;
+  }>;
 }
 
 export interface PsaCapabilities {
@@ -214,6 +232,7 @@ export interface SystemStatus {
     automationPaused: boolean;
     dryRun: boolean;
     pollIntervalSeconds: number | null;
+  classifyConcurrency: number | null;
     confidenceThreshold: number | null;
     lastPolledAt: number | null;
     lastPollStatus: string | null;
@@ -387,8 +406,9 @@ export const getAction = (id: string) => api.get<ActionLog>(`/actions/${id}`);
 export const getActionStats = (params: { tenantId?: string; clientId?: string; days?: number } = {}) =>
   api.get<QuickStats>('/actions/stats', { params: clean(params) });
 
-export const getCalibration = (params: { tenantId?: string; clientId?: string; days?: number } = {}) =>
-  api.get<CalibrationReport>('/actions/metrics', { params: clean(params) });
+export const getCalibration = (
+  params: { tenantId?: string; clientId?: string; days?: number; promptFingerprint?: string } = {},
+) => api.get<CalibrationReport>('/actions/metrics', { params: clean(params) });
 
 export const getClassifications = () => api.get<{ classifications: string[] }>('/actions/classifications');
 

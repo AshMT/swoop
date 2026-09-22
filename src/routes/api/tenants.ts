@@ -55,6 +55,7 @@ const updateSchema = z.object({
   aiApiKey: z.string().max(4096).nullable().optional(),
   aiModel: z.string().max(200).nullable().optional(),
   pollIntervalSeconds: z.number().int().min(15).max(3600).optional(),
+  classifyConcurrency: z.number().int().min(1).max(8).optional(),
   confidenceThreshold: z.number().min(0).max(1).optional(),
   automationPaused: z.boolean().optional(),
   dryRun: z.boolean().optional(),

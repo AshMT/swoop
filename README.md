@@ -153,6 +153,8 @@ This is the part that matters, and the part most tools skip.
 
 The Calibration page also tells you whether confidence is worth anything for your ticket mix, by comparing average confidence on the answers that turned out right against the ones that turned out wrong. If those two numbers are close, raising the confidence threshold will mostly just escalate correct answers, and you should lean on the sensitivity flag instead.
 
+**Changing the prompt or the model resets the comparison.** Each classification is stamped with a fingerprint of the prompt-and-model combination that produced it, so the page can scope to one version and warns when the window spans several. Without that, tuning the prompt to fix a confusion pair leaves you averaging over both versions, and the improvement stays invisible until enough new tickets dilute the old ones. An agreement trend chart shows the daily rate against the 90% target.
+
 Reviewing is the one genuinely repetitive task here, so it has keyboard shortcuts — press **?** on the Dashboard. `j`/`k` move, `y` and `n` record a verdict and advance automatically, `x` clears one.
 
 Export the full log as CSV at any point for offline analysis.
@@ -167,6 +169,7 @@ Under **Settings → Behaviour**:
 - **Preview mode** — classify and log, but never write back to the PSA.
 - **Poll interval** — 15 to 3600 seconds. 60 suits most desks.
 - **Confidence threshold** — anything the model is less sure of is escalated instead.
+- **Concurrency** — how many tickets are classified at once, 1 to 8. Leave it at 1 for a hosted provider. Raise it when a local model is falling behind: an 8B model on CPU can take tens of seconds per ticket, and one at a time means a morning's backlog clears slower than handling it by hand.
 - **Log retention** — off by default. Every log row keeps the full ticket body and the raw model response, which is what makes the log useful for debugging and also what makes it grow without bound. With a window set, the bulky text is cleared at a third of it and the row deleted at the end; the classification and your review survive the first stage, so accuracy figures are unaffected. The panel shows how much text is currently stored.
 
 **Settings → Diagnostics** shows poll health, the last error in full, and the discovered schema. Poll failures also appear as a banner across the top of the app, because an operator whose API token expired should not have to read container logs to find out.

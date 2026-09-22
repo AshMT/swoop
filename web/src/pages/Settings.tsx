@@ -458,6 +458,7 @@ function BehaviourSection({ tenant }: { tenant: Tenant }) {
 
   const [interval, setInterval] = useState(tenant.pollIntervalSeconds ?? 60);
   const [threshold, setThreshold] = useState(tenant.confidenceThreshold ?? 0.75);
+  const [concurrency, setConcurrency] = useState(tenant.classifyConcurrency ?? 1);
   const { state, setState, markSaved } = useSaveState();
 
   const patch = useMutation({
@@ -501,6 +502,7 @@ function BehaviourSection({ tenant }: { tenant: Tenant }) {
             await updateTenant(tenant.id, {
               pollIntervalSeconds: interval,
               confidenceThreshold: threshold,
+              classifyConcurrency: concurrency,
             });
             markSaved();
             void queryClient.invalidateQueries({ queryKey: ['tenants'] });
@@ -546,6 +548,27 @@ function BehaviourSection({ tenant }: { tenant: Tenant }) {
             Anything the model is less sure of than this is escalated instead. Raise it to see fewer wrong
             proposals and more escalations; check the Calibration page first to see whether confidence is
             actually separating right from wrong for your ticket mix.
+          </p>
+        </div>
+
+        <div>
+          <label className="label">
+            Classify {concurrency} ticket{concurrency === 1 ? '' : 's'} at a time
+          </label>
+          <input
+            type="range"
+            min={1}
+            max={8}
+            step={1}
+            value={concurrency}
+            onChange={(e) => setConcurrency(Number(e.target.value))}
+            className="w-full accent-swoop-600"
+          />
+          <p className="hint">
+            Raise this if a slow local model is falling behind on a busy morning — a small model on CPU can
+            take tens of seconds per ticket, and one at a time means a backlog clears slower than handling it
+            by hand. Leave it at 1 for a hosted provider, where the requests are fast and the rate limit is
+            the real constraint.
           </p>
         </div>
 

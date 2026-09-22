@@ -94,6 +94,7 @@ const listColumns = {
   status: actionLogs.status,
   errorMessage: actionLogs.errorMessage,
   aiModel: actionLogs.aiModel,
+  promptFingerprint: actionLogs.promptFingerprint,
   aiLatencyMs: actionLogs.aiLatencyMs,
   notePosted: actionLogs.notePosted,
   noteError: actionLogs.noteError,
@@ -142,12 +143,19 @@ router.get('/stats', async (req, res) => {
 
 /** The calibration report — agreement rate, confusion matrix, latency. */
 router.get('/metrics', async (req, res) => {
-  const tenantId = typeof req.query.tenantId === 'string' ? req.query.tenantId : undefined;
-  const clientId = typeof req.query.clientId === 'string' ? req.query.clientId : undefined;
-  const days = req.query.days ? Number(req.query.days) : undefined;
-  res.json(
-    await buildCalibrationReport({ tenantId, clientId, days: Number.isFinite(days) ? days : undefined }),
-  );
+  const parsed = z
+    .object({
+      tenantId: z.string().optional(),
+      clientId: z.string().optional(),
+      days: z.coerce.number().int().min(1).max(3650).optional(),
+      promptFingerprint: z.string().max(64).optional(),
+    })
+    .safeParse(req.query);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Invalid query parameters' });
+    return;
+  }
+  res.json(await buildCalibrationReport(parsed.data));
 });
 
 /** The label set, so the UI never hardcodes its own copy. */
@@ -185,6 +193,7 @@ router.get('/export.csv', async (req, res) => {
       followUpQuestion: actionLogs.followUpQuestion,
       entities: actionLogs.entities,
       aiModel: actionLogs.aiModel,
+      promptFingerprint: actionLogs.promptFingerprint,
       aiLatencyMs: actionLogs.aiLatencyMs,
       notePosted: actionLogs.notePosted,
       errorMessage: actionLogs.errorMessage,
@@ -218,6 +227,7 @@ router.get('/export.csv', async (req, res) => {
     'group_name',
     'license_sku',
     'ai_model',
+    'prompt_version',
     'ai_latency_ms',
     'note_posted',
     'error',
@@ -248,6 +258,7 @@ router.get('/export.csv', async (req, res) => {
         entities.group_name ?? '',
         entities.license_sku ?? '',
         row.aiModel ?? '',
+        row.promptFingerprint ?? '',
         row.aiLatencyMs ?? '',
         row.notePosted ? 'yes' : 'no',
         row.errorMessage ?? '',
