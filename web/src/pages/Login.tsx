@@ -1,79 +1,91 @@
-import { useState, FormEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { login } from '../api';
+import { useState, type FormEvent } from 'react';
+import { errorMessage, login, setToken } from '../api';
+import { Alert, Spinner } from '../components/ui';
+import { SwoopLogo } from '../components/Icons';
 
 export default function Login() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const navigate = useNavigate();
 
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = async (event: FormEvent) => {
+    event.preventDefault();
     setError('');
     setLoading(true);
     try {
       const res = await login(email, password);
-      localStorage.setItem('swoop_token', res.data.token);
+      setToken(res.data.token);
+      // A full navigation rather than a router push: it re-runs the app
+      // bootstrap so the token is picked up everywhere at once.
       window.location.assign('/dashboard');
-    } catch (err: any) {
-      setError(err.response?.data?.error || 'Login failed');
-    } finally {
+    } catch (err) {
+      setError(errorMessage(err, 'Sign-in failed'));
       setLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50">
+    <div className="flex min-h-screen items-center justify-center bg-slate-50 p-4 dark:bg-slate-950">
       <div className="w-full max-w-sm">
-        <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-gray-900">Swoop</h1>
-          <p className="text-gray-500 mt-1">AI Helpdesk Agent</p>
+        <div className="mb-8 flex flex-col items-center text-center">
+          <SwoopLogo className="h-12 w-12 text-swoop-600" />
+          <h1 className="mt-3 text-2xl font-semibold tracking-tight text-slate-900 dark:text-slate-50">Swoop</h1>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">AI ticket triage for MSPs</p>
         </div>
 
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8">
-          <h2 className="text-lg font-semibold text-gray-900 mb-6">Sign in</h2>
+        <div className="card p-6">
+          <h2 className="mb-5 text-base font-semibold text-slate-900 dark:text-slate-100">Sign in</h2>
 
           {error && (
-            <div className="bg-red-50 text-red-700 border border-red-200 rounded-lg p-3 text-sm mb-4">
-              {error}
+            <div className="mb-4">
+              <Alert tone="danger">{error}</Alert>
             </div>
           )}
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+              <label className="label" htmlFor="email">
+                Email
+              </label>
               <input
+                id="email"
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
                 autoFocus
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-swoop-500 focus:border-transparent"
+                autoComplete="username"
                 placeholder="you@msp.com"
+                className="input"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
+              <label className="label" htmlFor="password">
+                Password
+              </label>
               <input
+                id="password"
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-swoop-500 focus:border-transparent"
-                placeholder="••••••••"
+                autoComplete="current-password"
+                placeholder="••••••••••••"
+                className="input"
               />
             </div>
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full bg-swoop-600 hover:bg-swoop-700 disabled:opacity-60 text-white font-medium py-2 px-4 rounded-lg text-sm transition-colors"
-            >
-              {loading ? 'Signing in...' : 'Sign in'}
+            <button type="submit" disabled={loading} className="btn-primary w-full">
+              {loading ? <Spinner /> : null}
+              {loading ? 'Signing in…' : 'Sign in'}
             </button>
           </form>
         </div>
+
+        <p className="mt-6 text-center text-xs text-slate-400 dark:text-slate-500">
+          Self-hosted. Your tickets and credentials never leave your infrastructure, except for the calls to
+          the AI provider you configured.
+        </p>
       </div>
     </div>
   );

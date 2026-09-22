@@ -1,90 +1,80 @@
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import * as schema from './schema';
+import { runMigrations } from './migrations';
+import { config } from '../config';
+import { createLogger } from '../lib/logger';
 import path from 'path';
 import fs from 'fs';
 
-const dbPath = process.env.SQLITE_PATH || './data/swoop.db';
-const dbDir = path.dirname(dbPath);
+const log = createLogger('DB');
 
-if (!fs.existsSync(dbDir)) {
-  fs.mkdirSync(dbDir, { recursive: true });
+let sqlite: Database.Database | null = null;
+let drizzleDb: ReturnType<typeof drizzle> | null = null;
+
+function connect(): { sqlite: Database.Database; db: ReturnType<typeof drizzle> } {
+  if (sqlite && drizzleDb) return { sqlite, db: drizzleDb };
+
+  const dbPath = config().sqlitePath;
+  if (dbPath !== ':memory:') {
+    const dbDir = path.dirname(dbPath);
+    if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
+  }
+
+  sqlite = new Database(dbPath);
+  // WAL lets the HTTP handlers read while the poller writes.
+  sqlite.pragma('journal_mode = WAL');
+  sqlite.pragma('foreign_keys = ON');
+  // Wait rather than throw SQLITE_BUSY if the poller holds a write lock.
+  sqlite.pragma('busy_timeout = 5000');
+  sqlite.pragma('synchronous = NORMAL');
+
+  drizzleDb = drizzle(sqlite, { schema });
+  return { sqlite, db: drizzleDb };
 }
 
-const sqlite = new Database(dbPath);
+/**
+ * Proxy so `import { db } from './db'` keeps working while the real connection
+ * is opened lazily — importing a module must not touch the filesystem or throw
+ * on a missing config, which matters for unit tests.
+ */
+export const db = new Proxy({} as ReturnType<typeof drizzle>, {
+  get(_target, prop) {
+    const value = connect().db[prop as keyof ReturnType<typeof drizzle>];
+    return typeof value === 'function' ? value.bind(connect().db) : value;
+  },
+}) as ReturnType<typeof drizzle>;
 
-// Enable WAL mode for better concurrent read performance
-sqlite.pragma('journal_mode = WAL');
-sqlite.pragma('foreign_keys = ON');
-
-export const db = drizzle(sqlite, { schema });
+export function getSqlite(): Database.Database {
+  return connect().sqlite;
+}
 
 export function initializeDatabase(): void {
-  sqlite.exec(`
-    CREATE TABLE IF NOT EXISTS users (
-      id TEXT PRIMARY KEY,
-      email TEXT UNIQUE NOT NULL,
-      password_hash TEXT NOT NULL,
-      created_at INTEGER DEFAULT (unixepoch())
-    );
-
-    CREATE TABLE IF NOT EXISTS tenants (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      slug TEXT UNIQUE NOT NULL,
-      superops_subdomain TEXT NOT NULL,
-      superops_api_key TEXT NOT NULL,
-      superops_region TEXT DEFAULT 'us',
-      ai_base_url TEXT,
-      ai_api_key TEXT,
-      ai_model TEXT,
-      last_polled_at INTEGER,
-      created_at INTEGER DEFAULT (unixepoch())
-    );
-
-    CREATE TABLE IF NOT EXISTS clients (
-      id TEXT PRIMARY KEY,
-      tenant_id TEXT REFERENCES tenants(id),
-      name TEXT NOT NULL,
-      superops_company_id TEXT,
-      automation_enabled INTEGER DEFAULT 0,
-      created_at INTEGER DEFAULT (unixepoch())
-    );
-
-    CREATE TABLE IF NOT EXISTS action_logs (
-      id TEXT PRIMARY KEY,
-      tenant_id TEXT REFERENCES tenants(id),
-      client_id TEXT REFERENCES clients(id),
-      ticket_id TEXT NOT NULL,
-      ticket_subject TEXT,
-      ticket_body TEXT,
-      requester_email TEXT,
-      classification TEXT,
-      confidence REAL,
-      sensitivity TEXT,
-      entities TEXT,
-      reasoning TEXT,
-      follow_up_question TEXT,
-      proposed_psa_note TEXT,
-      raw_ai_response TEXT,
-      status TEXT DEFAULT 'pending',
-      created_at INTEGER DEFAULT (unixepoch())
-    );
-
-    CREATE TABLE IF NOT EXISTS processed_tickets (
-      ticket_id TEXT PRIMARY KEY,
-      tenant_id TEXT,
-      last_comment_id TEXT,
-      processed_at INTEGER DEFAULT (unixepoch())
-    );
-  `);
-
-  // Migrations for existing databases — ALTER TABLE ADD COLUMN fails if column exists,
-  // so we ignore the error and treat it as a no-op.
-  const migrations = [
-    `ALTER TABLE tenants ADD COLUMN superops_region TEXT DEFAULT 'us'`,
-  ];
-  for (const sql of migrations) {
-    try { sqlite.exec(sql); } catch { /* column already exists */ }
+  const { sqlite: raw } = connect();
+  const { applied, skipped } = runMigrations(raw);
+  if (applied.length === 0) {
+    log.info(`Schema up to date (${skipped} migration(s) already applied)`);
+  } else {
+    log.info(`Applied ${applied.length} migration(s): ${applied.join(', ')}`);
   }
+}
+
+export function closeDatabase(): void {
+  if (!sqlite) return;
+  try {
+    // Fold the WAL back into the main file so a plain file copy is a valid backup.
+    sqlite.pragma('wal_checkpoint(TRUNCATE)');
+    sqlite.close();
+  } catch (err) {
+    log.warn('Error while closing the database', err);
+  } finally {
+    sqlite = null;
+    drizzleDb = null;
+  }
+}
+
+/** Test seam — drops the cached connection so the next call reconnects. */
+export function resetDatabaseForTesting(): void {
+  sqlite = null;
+  drizzleDb = null;
 }

@@ -1,69 +1,191 @@
-import { Outlet, NavLink } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { NavLink, Outlet } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
+import { getSystemStatus, setToken } from '../api';
+import { applyTheme, readTheme, resolveTheme, watchSystemTheme, writeTheme, type Theme } from '../lib/theme';
+import { formatRelative } from '../lib/format';
+import {
+  CalibrationIcon,
+  ClientsIcon,
+  DashboardIcon,
+  LogoutIcon,
+  MoonIcon,
+  SettingsIcon,
+  SunIcon,
+  SwoopLogo,
+} from './Icons';
+import { Alert } from './ui';
+
+const NAV = [
+  { to: '/dashboard', label: 'Dashboard', Icon: DashboardIcon },
+  { to: '/calibration', label: 'Calibration', Icon: CalibrationIcon },
+  { to: '/clients', label: 'Clients', Icon: ClientsIcon },
+  { to: '/settings', label: 'Settings', Icon: SettingsIcon },
+];
+
+function ThemeToggle() {
+  const [theme, setTheme] = useState<Theme>(readTheme);
+
+  useEffect(() => {
+    applyTheme(theme);
+    // A 'system' choice should track the OS if it changes while the tab is open.
+    if (theme !== 'system') return;
+    return watchSystemTheme(() => applyTheme('system'));
+  }, [theme]);
+
+  const resolved = resolveTheme(theme);
+  const next: Theme = resolved === 'dark' ? 'light' : 'dark';
+
+  return (
+    <button
+      onClick={() => {
+        setTheme(next);
+        writeTheme(next);
+      }}
+      className="btn-ghost w-full justify-start"
+      aria-label={`Switch to ${next} theme`}
+      title={`Switch to ${next} theme`}
+    >
+      {resolved === 'dark' ? <SunIcon /> : <MoonIcon />}
+      <span>{resolved === 'dark' ? 'Light theme' : 'Dark theme'}</span>
+    </button>
+  );
+}
+
+/**
+ * Health strip.
+ *
+ * Poll failures used to be visible only in `docker logs`, so an operator whose
+ * SuperOps token had expired saw an empty dashboard with no explanation. This
+ * puts the reason on screen.
+ */
+function HealthBanner() {
+  const [dismissed, setDismissed] = useState<string[]>([]);
+
+  const { data } = useQuery({
+    queryKey: ['system-status'],
+    queryFn: () => getSystemStatus().then((r) => r.data),
+    refetchInterval: 30_000,
+    retry: false,
+  });
+
+  if (!data) return null;
+
+  const warnings = data.warnings.filter((w) => !dismissed.includes(w));
+  const pollerStopped = !data.poller.running;
+
+  if (warnings.length === 0 && !pollerStopped) return null;
+
+  return (
+    <div className="space-y-2 border-b border-slate-200 bg-slate-50 px-6 py-3 dark:border-slate-800 dark:bg-slate-900/60">
+      {pollerStopped && (
+        <Alert tone="danger" title="The ticket poller is not running">
+          No tickets are being classified. Check the server logs and restart Swoop.
+        </Alert>
+      )}
+      {warnings.map((warning) => (
+        <Alert key={warning} tone="warning" onDismiss={() => setDismissed((d) => [...d, warning])}>
+          {warning}
+        </Alert>
+      ))}
+    </div>
+  );
+}
+
+function PollStatusFooter() {
+  const { data } = useQuery({
+    queryKey: ['system-status'],
+    queryFn: () => getSystemStatus().then((r) => r.data),
+    refetchInterval: 30_000,
+    retry: false,
+  });
+
+  const tenant = data?.tenants[0];
+
+  return (
+    <div className="border-t border-slate-700/60 px-4 py-3 text-xs text-slate-400">
+      <div className="flex items-center gap-2">
+        <span
+          className={`h-1.5 w-1.5 rounded-full ${
+            !data
+              ? 'bg-slate-500'
+              : tenant?.lastPollStatus === 'error'
+                ? 'bg-red-500'
+                : tenant?.automationPaused
+                  ? 'bg-amber-500'
+                  : 'bg-emerald-500'
+          }`}
+        />
+        <span>
+          {!data
+            ? 'Status unknown'
+            : tenant?.automationPaused
+              ? 'Paused'
+              : tenant?.lastPollStatus === 'error'
+                ? 'Poll failed'
+                : 'Polling'}
+        </span>
+      </div>
+      {tenant && (
+        <div className="mt-1 text-slate-500">Last poll {formatRelative(tenant.lastPollFinishedAt)}</div>
+      )}
+      {data && <div className="mt-1 text-slate-600">Swoop v{data.version}</div>}
+    </div>
+  );
+}
 
 export default function Layout() {
   const handleLogout = () => {
-    localStorage.removeItem('swoop_token');
+    setToken(null);
     window.location.assign('/login');
   };
 
   return (
-    <div className="min-h-screen flex bg-gray-50">
-      {/* Sidebar */}
-      <aside className="w-56 bg-gray-900 text-white flex flex-col">
-        <div className="px-5 py-5 border-b border-gray-700">
-          <div className="flex items-center gap-2">
-            <span className="text-xl font-bold text-white">Swoop</span>
-            <span className="text-xs bg-swoop-600 text-white px-1.5 py-0.5 rounded font-medium">AI</span>
+    <div className="flex min-h-screen bg-slate-50 dark:bg-slate-950">
+      <aside className="flex w-56 shrink-0 flex-col bg-slate-900 text-slate-100">
+        <div className="flex items-center gap-2.5 border-b border-slate-700/60 px-4 py-4">
+          <SwoopLogo className="h-8 w-8 text-swoop-600" />
+          <div className="min-w-0">
+            <div className="text-base font-semibold leading-tight">Swoop</div>
+            <div className="truncate text-xs text-slate-400">AI ticket triage</div>
           </div>
-          <p className="text-gray-400 text-xs mt-1">MSP Helpdesk Agent</p>
         </div>
 
-        <nav className="flex-1 px-3 py-4 space-y-1">
-          <NavLink
-            to="/dashboard"
-            className={({ isActive }) =>
-              `flex items-center gap-2.5 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-                isActive ? 'bg-swoop-600 text-white' : 'text-gray-300 hover:bg-gray-800 hover:text-white'
-              }`
-            }
-          >
-            <span>Dashboard</span>
-          </NavLink>
-          <NavLink
-            to="/clients"
-            className={({ isActive }) =>
-              `flex items-center gap-2.5 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-                isActive ? 'bg-swoop-600 text-white' : 'text-gray-300 hover:bg-gray-800 hover:text-white'
-              }`
-            }
-          >
-            <span>Clients</span>
-          </NavLink>
-          <NavLink
-            to="/settings"
-            className={({ isActive }) =>
-              `flex items-center gap-2.5 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-                isActive ? 'bg-swoop-600 text-white' : 'text-gray-300 hover:bg-gray-800 hover:text-white'
-              }`
-            }
-          >
-            <span>Settings</span>
-          </NavLink>
+        <nav className="flex-1 space-y-1 px-2 py-3">
+          {NAV.map(({ to, label, Icon }) => (
+            <NavLink
+              key={to}
+              to={to}
+              className={({ isActive }) =>
+                `flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                  isActive
+                    ? 'bg-swoop-600 text-white'
+                    : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                }`
+              }
+            >
+              <Icon />
+              <span>{label}</span>
+            </NavLink>
+          ))}
         </nav>
 
-        <div className="px-3 py-4 border-t border-gray-700">
-          <button
-            onClick={handleLogout}
-            className="w-full text-left px-3 py-2 text-sm text-gray-400 hover:text-white hover:bg-gray-800 rounded-md transition-colors"
-          >
-            Sign out
+        <div className="space-y-1 px-2 pb-2">
+          <ThemeToggle />
+          <button onClick={handleLogout} className="btn-ghost w-full justify-start">
+            <LogoutIcon />
+            <span>Sign out</span>
           </button>
         </div>
+
+        <PollStatusFooter />
       </aside>
 
-      {/* Main */}
-      <main className="flex-1 min-w-0">
-        <Outlet />
+      <main className="min-w-0 flex-1">
+        <HealthBanner />
+        <div className="p-6">
+          <Outlet />
+        </div>
       </main>
     </div>
   );

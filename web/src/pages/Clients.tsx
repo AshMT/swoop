@@ -1,198 +1,199 @@
 import { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { getClients, getTenants, createClient, updateClient, deleteClient, type Client } from '../api';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  createClient,
+  deleteClient,
+  errorMessage,
+  getClients,
+  getTenants,
+  updateClient,
+  type Client,
+} from '../api';
+import {
+  Alert,
+  Badge,
+  ConfirmDialog,
+  EmptyState,
+  LoadingState,
+  PageHeader,
+  Toggle,
+  useToast,
+} from '../components/ui';
+import { TrashIcon } from '../components/Icons';
+import { formatRelative } from '../lib/format';
 
 export default function Clients() {
   const queryClient = useQueryClient();
+  const toast = useToast();
+
   const [showAdd, setShowAdd] = useState(false);
-  const [newName, setNewName] = useState('');
-  const [newCompanyId, setNewCompanyId] = useState('');
-  const [newEnabled, setNewEnabled] = useState(false);
-  const [addError, setAddError] = useState('');
+  const [editing, setEditing] = useState<Client | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<Client | null>(null);
 
   const { data: tenants } = useQuery({ queryKey: ['tenants'], queryFn: () => getTenants().then((r) => r.data) });
-  const tenantId = tenants?.[0]?.id || '';
+  const tenantId = tenants?.[0]?.id ?? '';
 
   const { data: clients = [], isLoading } = useQuery({
     queryKey: ['clients', tenantId],
     queryFn: () => getClients(tenantId).then((r) => r.data),
-    enabled: !!tenantId,
+    enabled: Boolean(tenantId),
   });
 
-  const toggleMutation = useMutation({
+  const invalidate = () => void queryClient.invalidateQueries({ queryKey: ['clients'] });
+
+  const toggle = useMutation({
     mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
       updateClient(id, { automationEnabled: enabled }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['clients'] }),
+    onSuccess: (_res, variables) => {
+      invalidate();
+      toast.success(variables.enabled ? 'Automation enabled' : 'Automation disabled');
+    },
+    onError: (err) => toast.error(errorMessage(err, 'Could not change the automation setting')),
   });
 
-  const deleteMutation = useMutation({
+  const remove = useMutation({
     mutationFn: (id: string) => deleteClient(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['clients'] }),
-  });
-
-  const createMutation = useMutation({
-    mutationFn: () =>
-      createClient({
-        tenantId,
-        name: newName,
-        superopsCompanyId: newCompanyId || undefined,
-        automationEnabled: newEnabled,
-      }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['clients'] });
-      setShowAdd(false);
-      setNewName('');
-      setNewCompanyId('');
-      setNewEnabled(false);
-      setAddError('');
+      invalidate();
+      setPendingDelete(null);
+      toast.success('Client removed — its classification history was kept');
     },
-    onError: (err: any) => {
-      setAddError(err.response?.data?.error || 'Failed to add client');
-    },
+    onError: (err) => toast.error(errorMessage(err, 'Could not remove the client')),
   });
 
-  const handleCreate = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newName.trim()) return;
-    createMutation.mutate();
-  };
+  const enabledCount = clients.filter((c) => c.automationEnabled).length;
+
+  if (!tenantId) {
+    return (
+      <div>
+        <PageHeader title="Clients" />
+        <div className="card">
+          <EmptyState
+            title="No SuperOps connection yet"
+            description="Connect SuperOps in Settings before adding clients."
+          />
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Clients</h1>
-          <p className="text-gray-500 text-sm mt-1">Enable/disable ticket automation per client (allowlist model)</p>
-        </div>
-        <button
-          onClick={() => setShowAdd(true)}
-          className="bg-swoop-600 hover:bg-swoop-700 text-white font-medium px-4 py-2 rounded-lg text-sm"
-        >
-          Add client
-        </button>
-      </div>
+    <div>
+      <PageHeader
+        title="Clients"
+        description="Swoop only reads tickets from clients you enable here. Everything else is skipped without being logged."
+        actions={
+          <button onClick={() => setShowAdd(true)} className="btn-primary">
+            Add client
+          </button>
+        }
+      />
 
-      {/* Add client form */}
-      {showAdd && (
-        <div className="bg-white rounded-xl border border-gray-200 p-5 mb-6">
-          <h3 className="font-semibold text-gray-900 mb-4">Add client</h3>
-          {addError && (
-            <div className="bg-red-50 text-red-700 border border-red-200 rounded p-3 text-sm mb-3">{addError}</div>
-          )}
-          <form onSubmit={handleCreate} className="space-y-3">
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Client name *</label>
-                <input
-                  type="text"
-                  value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
-                  required
-                  autoFocus
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-swoop-500"
-                  placeholder="Acme Corp"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">SuperOps Company ID</label>
-                <input
-                  type="text"
-                  value={newCompanyId}
-                  onChange={(e) => setNewCompanyId(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-swoop-500"
-                  placeholder="Optional"
-                />
-              </div>
-            </div>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={newEnabled}
-                onChange={(e) => setNewEnabled(e.target.checked)}
-                className="w-4 h-4 rounded text-swoop-600"
-              />
-              <span className="text-sm text-gray-700">Enable automation (classify tickets immediately)</span>
-            </label>
-            <div className="flex gap-2 pt-1">
-              <button
-                type="button"
-                onClick={() => { setShowAdd(false); setAddError(''); }}
-                className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-lg hover:bg-gray-50"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={createMutation.isPending}
-                className="px-4 py-2 bg-swoop-600 hover:bg-swoop-700 disabled:opacity-60 text-white text-sm font-medium rounded-lg"
-              >
-                {createMutation.isPending ? 'Adding...' : 'Add client'}
-              </button>
-            </div>
-          </form>
+      {clients.length > 0 && enabledCount === 0 && (
+        <div className="mb-4">
+          <Alert tone="warning" title="No clients have automation enabled">
+            Swoop is polling SuperOps but discarding every ticket, because the allowlist is empty. Enable one
+            client to start.
+          </Alert>
         </div>
       )}
 
-      {/* Clients table */}
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      {showAdd && (
+        <ClientForm
+          tenantId={tenantId}
+          onClose={() => setShowAdd(false)}
+          onSaved={() => {
+            setShowAdd(false);
+            invalidate();
+            toast.success('Client added');
+          }}
+        />
+      )}
+
+      {editing && (
+        <ClientForm
+          tenantId={tenantId}
+          client={editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            invalidate();
+            toast.success('Client updated');
+          }}
+        />
+      )}
+
+      <div className="card overflow-hidden">
         {isLoading ? (
-          <div className="text-center py-12 text-gray-400 text-sm">Loading clients...</div>
+          <LoadingState label="Loading clients" />
         ) : clients.length === 0 ? (
-          <div className="text-center py-12">
-            <p className="text-gray-500 text-sm">No clients yet.</p>
-            <p className="text-gray-400 text-xs mt-1">Add a client and enable automation to start classifying their tickets.</p>
-          </div>
+          <EmptyState
+            title="No clients yet"
+            description="Add a client and give it the SuperOps company ID so Swoop can match its tickets. Start with one, and enable more once the agreement rate looks right."
+            action={
+              <button onClick={() => setShowAdd(true)} className="btn-primary">
+                Add your first client
+              </button>
+            }
+          />
         ) : (
-          <table className="w-full text-left">
-            <thead>
-              <tr className="border-b border-gray-200 bg-gray-50">
-                <th className="px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Client name</th>
-                <th className="px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">SuperOps Company ID</th>
-                <th className="px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Automation</th>
-                <th className="px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Added</th>
-                <th className="px-4 py-3"></th>
+          <table className="w-full">
+            <thead className="border-b border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900/60">
+              <tr>
+                <th className="th">Client</th>
+                <th className="th">SuperOps company ID</th>
+                <th className="th">Automation</th>
+                <th className="th text-right">Classified</th>
+                <th className="th">Last activity</th>
+                <th className="th" />
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100">
+            <tbody>
               {clients.map((client) => (
-                <tr key={client.id} className="hover:bg-gray-50">
-                  <td className="px-4 py-3 text-sm font-medium text-gray-900">{client.name}</td>
-                  <td className="px-4 py-3 text-sm text-gray-500 font-mono">
-                    {client.superopsCompanyId || <span className="text-gray-400 font-sans">—</span>}
-                  </td>
-                  <td className="px-4 py-3">
+                <tr key={client.id} className="border-b border-slate-100 dark:border-slate-800/60">
+                  <td className="td">
                     <button
-                      onClick={() =>
-                        toggleMutation.mutate({ id: client.id, enabled: !client.automationEnabled })
-                      }
-                      disabled={toggleMutation.isPending}
-                      className={`relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none ${
-                        client.automationEnabled ? 'bg-swoop-600' : 'bg-gray-200'
-                      }`}
+                      onClick={() => setEditing(client)}
+                      className="font-medium text-slate-900 hover:text-swoop-600 dark:text-slate-100 dark:hover:text-swoop-400"
                     >
-                      <span
-                        className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                          client.automationEnabled ? 'translate-x-4' : 'translate-x-0'
-                        }`}
-                      />
+                      {client.name}
                     </button>
-                    <span className="ml-2 text-xs text-gray-500">
-                      {client.automationEnabled ? 'Enabled' : 'Disabled'}
-                    </span>
+                    {client.contextNotes && (
+                      <p
+                        className="mt-0.5 max-w-sm truncate text-xs text-slate-400 dark:text-slate-500"
+                        title={client.contextNotes}
+                      >
+                        {client.contextNotes}
+                      </p>
+                    )}
                   </td>
-                  <td className="px-4 py-3 text-xs text-gray-400">
-                    {client.createdAt ? new Date(client.createdAt * 1000).toLocaleDateString() : '—'}
+                  <td className="td font-mono text-xs">
+                    {client.superopsCompanyId || (
+                      <span className="font-sans text-slate-400" title="Swoop will fall back to matching on the client name">
+                        matching by name
+                      </span>
+                    )}
                   </td>
-                  <td className="px-4 py-3 text-right">
+                  <td className="td">
+                    <Toggle
+                      checked={client.automationEnabled}
+                      disabled={toggle.isPending}
+                      label={client.automationEnabled ? 'Enabled' : 'Disabled'}
+                      onChange={(enabled) => toggle.mutate({ id: client.id, enabled })}
+                    />
+                  </td>
+                  <td className="td tnum text-right">{client.actionCount ?? 0}</td>
+                  <td className="td text-xs text-slate-400">
+                    {client.lastActionAt ? formatRelative(client.lastActionAt) : 'never'}
+                  </td>
+                  <td className="td text-right">
                     <button
-                      onClick={() => {
-                        if (confirm(`Remove ${client.name}?`)) {
-                          deleteMutation.mutate(client.id);
-                        }
-                      }}
-                      className="text-xs text-red-500 hover:text-red-700"
+                      onClick={() => setPendingDelete(client)}
+                      className="rounded p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950"
+                      aria-label={`Remove ${client.name}`}
+                      title={`Remove ${client.name}`}
                     >
-                      Remove
+                      <TrashIcon />
                     </button>
                   </td>
                 </tr>
@@ -201,6 +202,139 @@ export default function Clients() {
           </table>
         )}
       </div>
+
+      <p className="mt-4 text-xs text-slate-500 dark:text-slate-400">
+        <Badge tone="info">How matching works</Badge> Swoop matches a ticket to a client by SuperOps company ID
+        first, then by exact client name. The company ID is the reliable one — names get renamed.
+      </p>
+
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title={`Remove ${pendingDelete?.name ?? 'this client'}?`}
+        description="Swoop will stop reading their tickets. Their classification history is kept for your records."
+        confirmLabel="Remove client"
+        destructive
+        onConfirm={() => pendingDelete && remove.mutate(pendingDelete.id)}
+        onCancel={() => setPendingDelete(null)}
+      />
+    </div>
+  );
+}
+
+function ClientForm({
+  tenantId,
+  client,
+  onClose,
+  onSaved,
+}: {
+  tenantId: string;
+  client?: Client;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [name, setName] = useState(client?.name ?? '');
+  const [companyId, setCompanyId] = useState(client?.superopsCompanyId ?? '');
+  const [contextNotes, setContextNotes] = useState(client?.contextNotes ?? '');
+  const [enabled, setEnabled] = useState(client?.automationEnabled ?? false);
+  const [error, setError] = useState('');
+
+  const save = useMutation({
+    mutationFn: () =>
+      client
+        ? updateClient(client.id, {
+            name: name.trim(),
+            superopsCompanyId: companyId.trim() || null,
+            contextNotes: contextNotes.trim() || null,
+            automationEnabled: enabled,
+          })
+        : createClient({
+            tenantId,
+            name: name.trim(),
+            superopsCompanyId: companyId.trim() || undefined,
+            contextNotes: contextNotes.trim() || undefined,
+            automationEnabled: enabled,
+          }),
+    onSuccess: onSaved,
+    onError: (err) => setError(errorMessage(err, 'Could not save the client')),
+  });
+
+  return (
+    <div className="card mb-5 p-5">
+      <h3 className="mb-4 text-sm font-semibold text-slate-900 dark:text-slate-100">
+        {client ? `Edit ${client.name}` : 'Add client'}
+      </h3>
+
+      {error && (
+        <div className="mb-4">
+          <Alert tone="danger">{error}</Alert>
+        </div>
+      )}
+
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          setError('');
+          if (!name.trim()) return;
+          save.mutate();
+        }}
+        className="space-y-4"
+      >
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div>
+            <label className="label">Client name</label>
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              required
+              autoFocus
+              placeholder="Acme Corp"
+              className="input"
+            />
+            <p className="hint">Used as a fallback match, so spell it as SuperOps does.</p>
+          </div>
+          <div>
+            <label className="label">SuperOps company ID</label>
+            <input
+              value={companyId}
+              onChange={(e) => setCompanyId(e.target.value)}
+              placeholder="Optional but recommended"
+              className="input font-mono"
+            />
+            <p className="hint">Find it in the URL when you open the client in SuperOps.</p>
+          </div>
+        </div>
+
+        <div>
+          <label className="label">Client context for the AI (optional)</label>
+          <textarea
+            value={contextNotes}
+            onChange={(e) => setContextNotes(e.target.value)}
+            rows={3}
+            placeholder="e.g. Email addresses are firstname.lastname@acme.com. Their finance team are all VIPs — treat anything from them as high sensitivity. They use Duo, not Microsoft Authenticator."
+            className="input"
+          />
+          <p className="hint">
+            Added to the prompt for this client's tickets. Naming conventions and VIP groups are the two that
+            change classifications the most.
+          </p>
+        </div>
+
+        <Toggle
+          checked={enabled}
+          onChange={setEnabled}
+          label="Enable automation"
+          description="Swoop starts classifying this client's tickets on the next poll."
+        />
+
+        <div className="flex gap-2 pt-1">
+          <button type="button" onClick={onClose} className="btn-secondary">
+            Cancel
+          </button>
+          <button type="submit" disabled={save.isPending || !name.trim()} className="btn-primary">
+            {save.isPending ? 'Saving…' : client ? 'Save changes' : 'Add client'}
+          </button>
+        </div>
+      </form>
     </div>
   );
 }

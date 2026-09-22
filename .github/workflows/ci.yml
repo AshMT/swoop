@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [main, 'claude/**']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+  # Called by the Docker workflow so an image is never published without
+  # having passed these checks.
+  workflow_call:
+
+# A newer push to the same ref makes the in-flight run redundant.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Lint, typecheck and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            web/package-lock.json
+
+      - name: Install backend dependencies
+        run: npm ci
+
+      - name: Install frontend dependencies
+        run: npm ci --prefix web
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm run test
+
+      - name: Build
+        run: npm run build
+
+      # A production image that cannot start is the failure mode that matters,
+      # and it is not covered by unit tests.
+      - name: Verify the built server boots and serves the UI
+        run: |
+          ENCRYPTION_KEY=$(openssl rand -hex 32) \
+          JWT_SECRET=$(openssl rand -hex 32) \
+          NODE_ENV=production PORT=3000 SQLITE_PATH=./data/ci.db \
+          node dist/server.js &
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:3000/health && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:3000/health | grep -q '"status":"ok"'
+          curl -fsS http://127.0.0.1:3000/ | grep -q '<div id="root">'
+          curl -fsS http://127.0.0.1:3000/api/setup/status | grep -q '"setupComplete":false'
+          # An unauthenticated setup call must be rejected.
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:3000/api/setup/tenant)" = "401"
+
+      - name: Verify it refuses to start without secrets
+        run: |
+          if NODE_ENV=production node dist/server.js; then
+            echo "Swoop started in production with no secrets set — this must fail"
+            exit 1
+          fi

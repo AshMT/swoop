@@ -1,243 +1,420 @@
-import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { getActions, getActionStats, getClients, getTenants, type ActionLog, type Client } from '../api';
+import { useEffect, useMemo, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  bulkReview,
+  downloadCsv,
+  errorMessage,
+  getActionStats,
+  getActions,
+  getClassifications,
+  getClients,
+  getTenants,
+  pollNow,
+  type ActionQuery,
+  type Client,
+} from '../api';
+import ActionRow from '../components/ActionRow';
+import {
+  Badge,
+  EmptyState,
+  LoadingState,
+  PageHeader,
+  Spinner,
+  StatCard,
+  useToast,
+} from '../components/ui';
+import { DownloadIcon, RefreshIcon, SearchIcon } from '../components/Icons';
+import { formatPercent, humanClassification } from '../lib/format';
 
-const CLASSIFICATION_COLORS: Record<string, string> = {
-  password_reset: 'bg-blue-100 text-blue-700',
-  group_add: 'bg-green-100 text-green-700',
-  group_remove: 'bg-orange-100 text-orange-700',
-  license_assign: 'bg-purple-100 text-purple-700',
-  license_remove: 'bg-pink-100 text-pink-700',
-  account_disable: 'bg-red-100 text-red-700',
-  account_enable: 'bg-green-100 text-green-700',
-  mfa_reset: 'bg-yellow-100 text-yellow-700',
-  mailbox_permission: 'bg-indigo-100 text-indigo-700',
-  ESCALATE: 'bg-red-100 text-red-800',
-  FOLLOW_UP: 'bg-amber-100 text-amber-800',
-};
-
-function ClassificationBadge({ cls }: { cls: string | null }) {
-  const color = cls ? (CLASSIFICATION_COLORS[cls] || 'bg-gray-100 text-gray-700') : 'bg-gray-100 text-gray-500';
-  return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${color}`}>
-      {cls || 'unknown'}
-    </span>
-  );
-}
-
-function ConfidenceBar({ value }: { value: number | null }) {
-  if (value === null) return <span className="text-gray-400 text-xs">—</span>;
-  const pct = Math.round(value * 100);
-  const color = pct >= 80 ? 'bg-green-500' : pct >= 60 ? 'bg-yellow-500' : 'bg-red-500';
-  return (
-    <div className="flex items-center gap-2">
-      <div className="w-16 bg-gray-200 rounded-full h-1.5">
-        <div className={`h-1.5 rounded-full ${color}`} style={{ width: `${pct}%` }} />
-      </div>
-      <span className="text-xs text-gray-600">{pct}%</span>
-    </div>
-  );
-}
-
-function ActionRow({ log, client }: { log: ActionLog; client?: Client }) {
-  const [expanded, setExpanded] = useState(false);
-  const entities = log.entities ? JSON.parse(log.entities) : {};
-
-  return (
-    <>
-      <tr
-        className="hover:bg-gray-50 cursor-pointer"
-        onClick={() => setExpanded(!expanded)}
-      >
-        <td className="px-4 py-3 text-xs text-gray-500 font-mono whitespace-nowrap">{log.ticketId}</td>
-        <td className="px-4 py-3 text-sm text-gray-900 max-w-xs">
-          <div className="truncate">{log.ticketSubject || '(no subject)'}</div>
-          {log.sensitivity === 'high' && (
-            <span className="inline-block mt-0.5 text-xs text-red-600 font-medium">HIGH SENSITIVITY</span>
-          )}
-        </td>
-        <td className="px-4 py-3 text-sm text-gray-600 whitespace-nowrap">{client?.name || '—'}</td>
-        <td className="px-4 py-3 whitespace-nowrap"><ClassificationBadge cls={log.classification} /></td>
-        <td className="px-4 py-3 whitespace-nowrap"><ConfidenceBar value={log.confidence} /></td>
-        <td className="px-4 py-3 whitespace-nowrap">
-          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
-            log.status === 'pending' ? 'bg-gray-100 text-gray-600' : 'bg-blue-100 text-blue-700'
-          }`}>
-            {log.status || 'pending'}
-          </span>
-        </td>
-        <td className="px-4 py-3 text-xs text-gray-400 whitespace-nowrap">
-          {log.createdAt ? new Date(log.createdAt * 1000).toLocaleString() : '—'}
-        </td>
-        <td className="px-4 py-3 text-gray-400 text-xs">{expanded ? '▲' : '▼'}</td>
-      </tr>
-      {expanded && (
-        <tr className="bg-gray-50">
-          <td colSpan={8} className="px-4 py-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-              <div>
-                <h4 className="font-medium text-gray-700 mb-1">AI Reasoning</h4>
-                <p className="text-gray-600 text-xs leading-relaxed">{log.reasoning || '—'}</p>
-                {log.followUpQuestion && (
-                  <div className="mt-2">
-                    <span className="text-amber-700 font-medium text-xs">Follow-up needed: </span>
-                    <span className="text-gray-600 text-xs">{log.followUpQuestion}</span>
-                  </div>
-                )}
-              </div>
-              <div>
-                <h4 className="font-medium text-gray-700 mb-1">Entities extracted</h4>
-                <div className="space-y-0.5 text-xs text-gray-600">
-                  {entities.target_user_email && <div>User email: <span className="font-mono">{entities.target_user_email}</span></div>}
-                  {entities.target_user_display_name && <div>Display name: {entities.target_user_display_name}</div>}
-                  {entities.group_name && <div>Group: {entities.group_name}</div>}
-                  {entities.license_sku && <div>License: {entities.license_sku}</div>}
-                  {!entities.target_user_email && !entities.target_user_display_name && !entities.group_name && !entities.license_sku && (
-                    <span className="text-gray-400">None extracted</span>
-                  )}
-                </div>
-              </div>
-              {log.proposedPsaNote && (
-                <div className="md:col-span-2">
-                  <h4 className="font-medium text-gray-700 mb-1">Proposed internal note</h4>
-                  <pre className="text-xs text-gray-600 bg-white border border-gray-200 rounded-lg p-3 whitespace-pre-wrap font-mono leading-relaxed overflow-auto max-h-48">
-                    {log.proposedPsaNote}
-                  </pre>
-                </div>
-              )}
-            </div>
-          </td>
-        </tr>
-      )}
-    </>
-  );
-}
+const PAGE_SIZE = 25;
 
 export default function Dashboard() {
+  const queryClient = useQueryClient();
+  const toast = useToast();
+
   const [filterClient, setFilterClient] = useState('');
   const [filterClassification, setFilterClassification] = useState('');
+  const [filterReview, setFilterReview] = useState<'' | 'unreviewed' | 'correct' | 'incorrect'>('');
+  const [filterSensitivity, setFilterSensitivity] = useState<'' | 'high'>('');
+  const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [page, setPage] = useState(0);
+  const [selected, setSelected] = useState<string[]>([]);
+
+  // Debounced so typing does not fire a request per keystroke.
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearch(search.trim()), 300);
+    return () => window.clearTimeout(timer);
+  }, [search]);
+
+  // Any filter change invalidates the current page offset.
+  useEffect(() => {
+    setPage(0);
+    setSelected([]);
+  }, [filterClient, filterClassification, filterReview, filterSensitivity, debouncedSearch]);
 
   const { data: tenants } = useQuery({ queryKey: ['tenants'], queryFn: () => getTenants().then((r) => r.data) });
-  const tenantId = tenants?.[0]?.id;
+  const tenant = tenants?.[0];
+  const tenantId = tenant?.id;
 
-  const { data: stats } = useQuery({
-    queryKey: ['stats', tenantId],
-    queryFn: () => getActionStats(tenantId).then((r) => r.data),
-    enabled: !!tenantId,
-    refetchInterval: 30_000,
+  const { data: classifications = [] } = useQuery({
+    queryKey: ['classifications'],
+    queryFn: () => getClassifications().then((r) => r.data.classifications),
+    staleTime: Infinity,
   });
 
   const { data: clients = [] } = useQuery({
     queryKey: ['clients', tenantId],
     queryFn: () => getClients(tenantId).then((r) => r.data),
-    enabled: !!tenantId,
+    enabled: Boolean(tenantId),
   });
 
-  const { data: actions = [], isLoading } = useQuery({
-    queryKey: ['actions', tenantId, filterClient, filterClassification],
-    queryFn: () =>
-      getActions({
-        tenantId,
-        clientId: filterClient || undefined,
-        classification: filterClassification || undefined,
-        limit: 50,
-      }).then((r) => r.data),
-    enabled: !!tenantId,
+  const { data: stats } = useQuery({
+    queryKey: ['stats', tenantId],
+    queryFn: () => getActionStats({ tenantId }).then((r) => r.data),
+    enabled: Boolean(tenantId),
     refetchInterval: 30_000,
   });
 
-  const clientMap: Record<string, Client> = {};
-  for (const c of clients) clientMap[c.id] = c;
+  const query: ActionQuery = useMemo(
+    () => ({
+      tenantId,
+      clientId: filterClient || undefined,
+      classification: filterClassification || undefined,
+      review: filterReview || undefined,
+      sensitivity: filterSensitivity || undefined,
+      q: debouncedSearch || undefined,
+      limit: PAGE_SIZE,
+      offset: page * PAGE_SIZE,
+    }),
+    [tenantId, filterClient, filterClassification, filterReview, filterSensitivity, debouncedSearch, page],
+  );
 
-  const classifications = Object.keys(stats?.byClassification || {});
+  const { data: actions, isLoading, isFetching } = useQuery({
+    queryKey: ['actions', query],
+    queryFn: () => getActions(query).then((r) => r.data),
+    enabled: Boolean(tenantId),
+    refetchInterval: 30_000,
+    placeholderData: (previous) => previous,
+  });
+
+  const clientMap = useMemo(() => {
+    const map: Record<string, Client> = {};
+    for (const client of clients) map[client.id] = client;
+    return map;
+  }, [clients]);
+
+  const poll = useMutation({
+    mutationFn: () => pollNow(tenantId!),
+    onSuccess: (res) => {
+      const summary = res.data.summary;
+      void queryClient.invalidateQueries({ queryKey: ['actions'] });
+      void queryClient.invalidateQueries({ queryKey: ['stats'] });
+      void queryClient.invalidateQueries({ queryKey: ['system-status'] });
+      if (!summary || summary.outcome === 'error') {
+        toast.error(summary?.error ?? res.data.error ?? 'The poll did not complete');
+      } else if (summary.outcome === 'paused' || summary.outcome === 'idle') {
+        toast.info(summary.error ?? 'Nothing to poll');
+      } else if (summary.classified > 0) {
+        toast.success(
+          `Classified ${summary.classified} new ticket(s)` +
+            (summary.failed > 0 ? `, ${summary.failed} failed and will be retried` : ''),
+        );
+      } else if (summary.failed > 0) {
+        toast.error(summary.error ?? `${summary.failed} ticket(s) failed classification`);
+      } else {
+        toast.info(`Fetched ${summary.fetched} ticket(s); nothing new to classify`);
+      }
+    },
+    onError: (err) => toast.error(errorMessage(err, 'The poll failed')),
+  });
+
+  const markSelected = useMutation({
+    mutationFn: (verdict: 'correct' | 'incorrect' | null) => bulkReview(selected, verdict),
+    onSuccess: (res) => {
+      setSelected([]);
+      void queryClient.invalidateQueries({ queryKey: ['actions'] });
+      void queryClient.invalidateQueries({ queryKey: ['stats'] });
+      void queryClient.invalidateQueries({ queryKey: ['calibration'] });
+      toast.success(`Updated ${res.data.updated} row(s)`);
+    },
+    onError: (err) => toast.error(errorMessage(err, 'Could not update the reviews')),
+  });
+
+  const items = actions?.items ?? [];
+  const total = actions?.total ?? 0;
+  const allOnPageSelected = items.length > 0 && items.every((item) => selected.includes(item.id));
+
+  const handleExport = async () => {
+    try {
+      await downloadCsv({ ...query, limit: undefined, offset: undefined });
+    } catch (err) {
+      toast.error(errorMessage(err, 'Could not export the log'));
+    }
+  };
+
+  if (!tenant) {
+    return (
+      <div>
+        <PageHeader title="Dashboard" />
+        <div className="card">
+          <EmptyState
+            title="No SuperOps connection yet"
+            description="Add your SuperOps credentials in Settings before Swoop can start reading tickets."
+          />
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="p-6">
-      {/* Header */}
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
-        <p className="text-gray-500 text-sm mt-1">Recent AI classifications — read-only Phase 1</p>
-      </div>
+    <div>
+      <PageHeader
+        title="Dashboard"
+        description={
+          tenant.dryRun
+            ? 'Preview mode — tickets are classified and logged, but no notes are written back to SuperOps.'
+            : 'Swoop classifies tickets and posts a private note proposing an action. It never executes anything.'
+        }
+        actions={
+          <>
+            <button onClick={handleExport} className="btn-secondary">
+              <DownloadIcon /> Export CSV
+            </button>
+            <button onClick={() => poll.mutate()} disabled={poll.isPending} className="btn-primary">
+              {poll.isPending ? <Spinner /> : <RefreshIcon />}
+              Poll now
+            </button>
+          </>
+        }
+      />
 
-      {/* Stats */}
+      {/* ─── Headline numbers ─────────────────────────────────────────────── */}
       {stats && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
-          <div className="bg-white rounded-xl border border-gray-200 p-4">
-            <div className="text-2xl font-bold text-gray-900">{stats.total}</div>
-            <div className="text-xs text-gray-500 mt-1">Total tickets processed</div>
-          </div>
-          <div className="bg-white rounded-xl border border-gray-200 p-4">
-            <div className="text-2xl font-bold text-red-600">{stats.byClassification['ESCALATE'] || 0}</div>
-            <div className="text-xs text-gray-500 mt-1">Escalated</div>
-          </div>
-          <div className="bg-white rounded-xl border border-gray-200 p-4">
-            <div className="text-2xl font-bold text-amber-600">{stats.byClassification['FOLLOW_UP'] || 0}</div>
-            <div className="text-xs text-gray-500 mt-1">Need follow-up</div>
-          </div>
-          <div className="bg-white rounded-xl border border-gray-200 p-4">
-            <div className="text-2xl font-bold text-red-700">{stats.highSensitivity}</div>
-            <div className="text-xs text-gray-500 mt-1">High sensitivity</div>
-          </div>
+        <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+          <StatCard label="Tickets classified" value={stats.total} />
+          <StatCard
+            label="Agreement rate"
+            value={formatPercent(stats.agreement)}
+            hint={stats.reviewed > 0 ? `${stats.reviewed} reviewed` : 'Review some tickets'}
+            tone={
+              stats.agreement === null
+                ? 'neutral'
+                : stats.agreement >= 0.9
+                  ? 'success'
+                  : stats.agreement >= 0.85
+                    ? 'warning'
+                    : 'danger'
+            }
+          />
+          <StatCard
+            label="Awaiting review"
+            value={stats.awaitingReview}
+            tone={stats.awaitingReview > 0 ? 'warning' : 'neutral'}
+          />
+          <StatCard label="High sensitivity" value={stats.highSensitivity} />
+          <StatCard
+            label="AI failures"
+            value={stats.failures}
+            tone={stats.failures > 0 ? 'danger' : 'neutral'}
+            hint={stats.failures > 0 ? 'Excluded from accuracy' : undefined}
+          />
         </div>
       )}
 
-      {/* Filters */}
-      <div className="flex flex-wrap gap-3 mb-4">
-        <select
-          value={filterClient}
-          onChange={(e) => setFilterClient(e.target.value)}
-          className="px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-swoop-500"
-        >
+      {/* ─── Filters ──────────────────────────────────────────────────────── */}
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <div className="relative">
+          <SearchIcon className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-slate-400" />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search subject, body, ticket or requester"
+            className="input w-72 pl-8"
+            aria-label="Search the action log"
+          />
+        </div>
+
+        <select value={filterClient} onChange={(e) => setFilterClient(e.target.value)} className="input w-auto">
           <option value="">All clients</option>
-          {clients.map((c) => (
-            <option key={c.id} value={c.id}>{c.name}</option>
+          {clients.map((client) => (
+            <option key={client.id} value={client.id}>
+              {client.name}
+            </option>
           ))}
         </select>
+
         <select
           value={filterClassification}
           onChange={(e) => setFilterClassification(e.target.value)}
-          className="px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-swoop-500"
+          className="input w-auto"
         >
           <option value="">All classifications</option>
-          {classifications.map((cls) => (
-            <option key={cls} value={cls}>{cls}</option>
+          {classifications.map((id) => (
+            <option key={id} value={id}>
+              {humanClassification(id)}
+            </option>
           ))}
         </select>
+
+        <select
+          value={filterReview}
+          onChange={(e) => setFilterReview(e.target.value as typeof filterReview)}
+          className="input w-auto"
+        >
+          <option value="">Any review state</option>
+          <option value="unreviewed">Not yet reviewed</option>
+          <option value="correct">Marked correct</option>
+          <option value="incorrect">Marked incorrect</option>
+        </select>
+
+        <button
+          onClick={() => setFilterSensitivity(filterSensitivity ? '' : 'high')}
+          className={filterSensitivity ? 'btn-primary' : 'btn-secondary'}
+        >
+          High sensitivity only
+        </button>
+
+        {(filterClient || filterClassification || filterReview || filterSensitivity || search) && (
+          <button
+            onClick={() => {
+              setFilterClient('');
+              setFilterClassification('');
+              setFilterReview('');
+              setFilterSensitivity('');
+              setSearch('');
+            }}
+            className="btn-ghost"
+          >
+            Clear filters
+          </button>
+        )}
+
+        {isFetching && !isLoading && <Spinner className="h-4 w-4 text-slate-400" />}
       </div>
 
-      {/* Table */}
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      {/* ─── Bulk review bar ──────────────────────────────────────────────── */}
+      {selected.length > 0 && (
+        <div className="mb-3 flex flex-wrap items-center gap-3 rounded-lg border border-swoop-200 bg-swoop-50 px-4 py-2.5 dark:border-swoop-900 dark:bg-swoop-950/50">
+          <span className="text-sm font-medium text-swoop-900 dark:text-swoop-200">
+            {selected.length} selected
+          </span>
+          <button
+            onClick={() => markSelected.mutate('correct')}
+            disabled={markSelected.isPending}
+            className="btn-secondary !py-1 text-xs"
+          >
+            Mark all correct
+          </button>
+          <button
+            onClick={() => markSelected.mutate(null)}
+            disabled={markSelected.isPending}
+            className="btn-ghost !py-1 text-xs"
+          >
+            Clear reviews
+          </button>
+          <button onClick={() => setSelected([])} className="btn-ghost !py-1 text-xs">
+            Deselect
+          </button>
+        </div>
+      )}
+
+      {/* ─── Log ──────────────────────────────────────────────────────────── */}
+      <div className="card overflow-hidden">
         {isLoading ? (
-          <div className="text-center py-12 text-gray-400 text-sm">Loading action logs...</div>
-        ) : actions.length === 0 ? (
-          <div className="text-center py-12">
-            <p className="text-gray-500 text-sm">No action logs yet.</p>
-            <p className="text-gray-400 text-xs mt-1">Swoop will start classifying tickets on the next poll cycle (every 60s).</p>
-          </div>
+          <LoadingState label="Loading the action log" />
+        ) : items.length === 0 ? (
+          <EmptyState
+            title={total === 0 ? 'Nothing classified yet' : 'No rows match these filters'}
+            description={
+              total === 0
+                ? 'Swoop polls SuperOps on a schedule and classifies tickets from clients with automation enabled. Use "Poll now" to check immediately.'
+                : 'Try widening the filters or clearing the search.'
+            }
+          />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left">
-              <thead>
-                <tr className="border-b border-gray-200 bg-gray-50">
-                  <th className="px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Ticket ID</th>
-                  <th className="px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Subject</th>
-                  <th className="px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Client</th>
-                  <th className="px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Classification</th>
-                  <th className="px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Confidence</th>
-                  <th className="px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                  <th className="px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Time</th>
-                  <th className="px-4 py-3"></th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {actions.map((log) => (
-                  <ActionRow key={log.id} log={log} client={clientMap[log.clientId]} />
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <>
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="border-b border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900/60">
+                  <tr>
+                    <th className="px-3 py-2.5">
+                      <input
+                        type="checkbox"
+                        checked={allOnPageSelected}
+                        onChange={(e) =>
+                          setSelected(
+                            e.target.checked
+                              ? [...new Set([...selected, ...items.map((i) => i.id)])]
+                              : selected.filter((id) => !items.some((i) => i.id === id)),
+                          )
+                        }
+                        aria-label="Select every row on this page"
+                        className="h-4 w-4 rounded border-slate-300 text-swoop-600 dark:border-slate-600 dark:bg-slate-800"
+                      />
+                    </th>
+                    <th className="th">Ticket</th>
+                    <th className="th">Subject</th>
+                    <th className="th">Client</th>
+                    <th className="th">Classification</th>
+                    <th className="th">Confidence</th>
+                    <th className="th">Correct?</th>
+                    <th className="th">When</th>
+                    <th className="th" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {items.map((log) => (
+                    <ActionRow
+                      key={log.id}
+                      log={log}
+                      client={log.clientId ? clientMap[log.clientId] : undefined}
+                      classifications={classifications}
+                      confidenceThreshold={tenant.confidenceThreshold}
+                      selected={selected.includes(log.id)}
+                      onSelect={(id, isSelected) =>
+                        setSelected((current) =>
+                          isSelected ? [...current, id] : current.filter((x) => x !== id),
+                        )
+                      }
+                    />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="flex items-center justify-between border-t border-slate-200 px-4 py-3 text-sm dark:border-slate-800">
+              <span className="text-slate-500 dark:text-slate-400">
+                {page * PAGE_SIZE + 1}–{page * PAGE_SIZE + items.length} of {total}
+              </span>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setPage((p) => Math.max(0, p - 1))}
+                  disabled={page === 0}
+                  className="btn-secondary !py-1 text-xs"
+                >
+                  Previous
+                </button>
+                <button
+                  onClick={() => setPage((p) => p + 1)}
+                  disabled={!actions?.hasMore}
+                  className="btn-secondary !py-1 text-xs"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          </>
         )}
       </div>
+
+      {stats && stats.awaitingReview > 0 && (
+        <p className="mt-4 text-xs text-slate-500 dark:text-slate-400">
+          <Badge tone="warning">Tip</Badge>{' '}
+          Marking classifications correct or incorrect is what produces the agreement rate on the Calibration
+          page. Aim for at least 20 reviews before reading much into the number.
+        </p>
+      )}
     </div>
   );
 }

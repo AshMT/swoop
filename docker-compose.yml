@@ -1,0 +1,44 @@
+# Swoop — single-container deployment.
+#
+#   cp .env.example .env    # then set ENCRYPTION_KEY and JWT_SECRET
+#   docker compose up -d
+#
+# To run the published image instead of building locally:
+#   SWOOP_IMAGE=ghcr.io/ashmt/swoop:latest docker compose up -d
+
+services:
+  swoop:
+    image: ${SWOOP_IMAGE:-swoop:local}
+    build:
+      context: .
+    container_name: swoop
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      SQLITE_PATH: /app/data/swoop.db
+      # Required. Swoop refuses to start in production without these.
+      ENCRYPTION_KEY: "${ENCRYPTION_KEY:?set ENCRYPTION_KEY in .env — generate one with openssl rand -hex 32}"
+      JWT_SECRET: "${JWT_SECRET:?set JWT_SECRET in .env — generate one with openssl rand -hex 32}"
+      # Optional: the setup wizard can configure the AI provider instead.
+      AI_BASE_URL: ${AI_BASE_URL:-}
+      AI_API_KEY: ${AI_API_KEY:-}
+      AI_MODEL: ${AI_MODEL:-}
+      AI_TIMEOUT_MS: ${AI_TIMEOUT_MS:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_FORMAT: ${LOG_FORMAT:-}
+      # Set to 1 only when Swoop sits behind a reverse proxy you control.
+      TRUST_PROXY: ${TRUST_PROXY:-}
+    volumes:
+      - swoop-data:/app/data
+    # Lets the container reach an Ollama running on the Docker host as
+    # http://host.docker.internal:11434 on Linux as well as macOS/Windows.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  swoop-data:
