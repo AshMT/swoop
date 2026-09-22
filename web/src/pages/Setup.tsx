@@ -1,418 +1,543 @@
-import { useState, FormEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, type FormEvent } from 'react';
 import {
+  errorMessage,
+  setToken,
   setupAdmin,
-  testSuperOps,
-  setupTenant,
-  testAi,
   setupAiConfig,
   setupClient,
+  setupTenant,
+  testAi,
+  testSuperOps,
+  type ConnectionTestResult,
 } from '../api';
-
-interface Props {
-  onComplete: () => void;
-}
+import { Alert, Spinner, Toggle } from '../components/ui';
+import { CheckIcon, SwoopLogo } from '../components/Icons';
 
 type Step = 'admin' | 'superops' | 'ai' | 'client' | 'done';
-const STEP_ORDER: Step[] = ['admin', 'superops', 'ai', 'client'];
 
-const STEP_LABELS: Record<string, string> = {
-  admin: 'Admin account',
-  superops: 'SuperOps',
-  ai: 'AI provider',
-  client: 'First client',
-};
+const STEPS: Array<{ id: Step; label: string }> = [
+  { id: 'admin', label: 'Account' },
+  { id: 'superops', label: 'SuperOps' },
+  { id: 'ai', label: 'AI provider' },
+  { id: 'client', label: 'First client' },
+];
 
-export default function Setup({ onComplete }: Props) {
-  const navigate = useNavigate();
+const AI_PRESETS = [
+  { label: 'Ollama (local)', baseUrl: 'http://localhost:11434', model: 'qwen3:8b', key: '' },
+  { label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini', key: '' },
+  { label: 'Groq', baseUrl: 'https://api.groq.com/openai/v1', model: 'llama-3.3-70b-versatile', key: '' },
+];
+
+export default function Setup({ onComplete }: { onComplete: () => void }) {
   const [step, setStep] = useState<Step>('admin');
   const [tenantId, setTenantId] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
 
+  // Step 1
   const [adminEmail, setAdminEmail] = useState('');
   const [adminPassword, setAdminPassword] = useState('');
+  const [adminConfirm, setAdminConfirm] = useState('');
+
+  // Step 2
   const [mspName, setMspName] = useState('');
   const [subdomain, setSubdomain] = useState('');
   const [superopsKey, setSuperopsKey] = useState('');
-  const [superopsRegion, setSuperopsRegion] = useState<'us' | 'eu'>('us');
-  const [aiBaseUrl, setAiBaseUrl] = useState('http://localhost:11434/v1');
-  const [aiKey, setAiKey] = useState('ollama');
+  const [region, setRegion] = useState<'us' | 'eu'>('us');
+  const [superopsTest, setSuperopsTest] = useState<ConnectionTestResult | null>(null);
+
+  // Step 3
+  const [aiBaseUrl, setAiBaseUrl] = useState('http://localhost:11434');
   const [aiModel, setAiModel] = useState('qwen3:8b');
+  const [aiKey, setAiKey] = useState('');
+  const [aiTest, setAiTest] = useState<{ ok: boolean; error?: string; reply?: string } | null>(null);
+
+  // Step 4
   const [clientName, setClientName] = useState('');
   const [clientCompanyId, setClientCompanyId] = useState('');
-  const [clientEnabled, setClientEnabled] = useState(false);
+  const [clientEnabled, setClientEnabled] = useState(true);
 
-  const [loading, setLoading] = useState(false);
-  const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{ ok: boolean; error?: string; endpoint?: string } | null>(null);
-  const [error, setError] = useState('');
+  const stepIndex = STEPS.findIndex((s) => s.id === step);
 
-  const currentIndex = STEP_ORDER.indexOf(step as any);
-
-  const goBack = () => {
-    if (currentIndex > 0) {
-      setError('');
-      setTestResult(null);
-      setStep(STEP_ORDER[currentIndex - 1]);
-    }
-  };
-
-  // Strip protocol/path if user pastes a full URL; keep the hostname as-is
-  const handleSubdomainChange = (val: string) => {
-    const clean = val
-      .replace(/^https?:\/\//, '')
-      .replace(/\/.*$/, '')
-      .trim();
-    setSubdomain(clean);
-  };
-
-  const handleAdmin = async (e: FormEvent) => {
-    e.preventDefault();
+  const run = async (fn: () => Promise<void>) => {
     setError('');
-    setLoading(true);
+    setBusy(true);
     try {
-      const res = await setupAdmin(adminEmail, adminPassword);
-      localStorage.setItem('swoop_token', res.data.token);
-      setStep('superops');
-    } catch (err: any) {
-      const msg = err.response?.data?.error || 'Failed to create account';
-      // If admin already exists (e.g. refreshed mid-setup), log in instead
-      if (err.response?.status === 409) {
-        setError('Admin already exists — go to /login to sign in, or continue below.');
-      } else {
-        setError(msg);
-      }
+      await fn();
+    } catch (err) {
+      setError(errorMessage(err));
     } finally {
-      setLoading(false);
+      setBusy(false);
     }
   };
 
-  const handleTestSuperOps = async () => {
-    setTesting(true);
-    setTestResult(null);
-    try {
-      const res = await testSuperOps(subdomain, superopsKey, superopsRegion);
-      setTestResult(res.data);
-    } catch {
-      setTestResult({ ok: false, error: 'Request failed — check network' });
-    } finally {
-      setTesting(false);
-    }
-  };
-
-  const handleSuperOps = async (e: FormEvent) => {
-    e.preventDefault();
-    setError('');
-    setLoading(true);
-    try {
-      const res = await setupTenant(mspName, subdomain, superopsKey, superopsRegion);
-      setTenantId(res.data.id);
-      setTestResult(null);
-      setStep('ai');
-    } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to save SuperOps config');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleTestAi = async () => {
-    setTesting(true);
-    setTestResult(null);
-    try {
-      const res = await testAi(aiBaseUrl, aiKey, aiModel);
-      setTestResult(res.data);
-    } catch {
-      setTestResult({ ok: false, error: 'Request failed — check network or base URL' });
-    } finally {
-      setTesting(false);
-    }
-  };
-
-  const handleAi = async (e: FormEvent) => {
-    e.preventDefault();
-    setError('');
-    setLoading(true);
-    try {
-      await setupAiConfig(tenantId, aiBaseUrl, aiKey, aiModel);
-      setTestResult(null);
-      setStep('client');
-    } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to save AI config');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleClient = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!clientName.trim()) {
-      setStep('done');
+  const handleAdmin = (event: FormEvent) => {
+    event.preventDefault();
+    if (adminPassword !== adminConfirm) {
+      setError('The passwords do not match.');
       return;
     }
-    setError('');
-    setLoading(true);
-    try {
-      await setupClient(tenantId, clientName, clientCompanyId || undefined, clientEnabled);
-      setStep('done');
-    } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to add client');
-    } finally {
-      setLoading(false);
-    }
+    void run(async () => {
+      const res = await setupAdmin(adminEmail, adminPassword);
+      // Every later step is authenticated with this token.
+      setToken(res.data.token);
+      setStep('superops');
+    });
   };
 
-  const handleFinish = () => {
-    onComplete();
-    navigate('/dashboard');
+  const handleSuperOps = (event: FormEvent) => {
+    event.preventDefault();
+    void run(async () => {
+      const res = await setupTenant(mspName, subdomain, superopsKey, region);
+      setTenantId(res.data.id);
+      setStep('ai');
+    });
+  };
+
+  const handleAi = (event: FormEvent) => {
+    event.preventDefault();
+    void run(async () => {
+      await setupAiConfig(tenantId, aiBaseUrl, aiKey, aiModel);
+      setStep('client');
+    });
+  };
+
+  const handleClient = (event: FormEvent) => {
+    event.preventDefault();
+    void run(async () => {
+      await setupClient(tenantId, clientName, clientCompanyId || undefined, clientEnabled);
+      setStep('done');
+    });
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
-      <div className="w-full max-w-lg">
-        <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-gray-900">Welcome to Swoop</h1>
-          <p className="text-gray-500 mt-1">Let's get you set up in a few minutes</p>
+    <div className="min-h-screen bg-slate-50 px-4 py-10 dark:bg-slate-950">
+      <div className="mx-auto max-w-xl">
+        <div className="mb-8 flex flex-col items-center text-center">
+          <SwoopLogo className="h-12 w-12 text-swoop-600" />
+          <h1 className="mt-3 text-2xl font-semibold tracking-tight text-slate-900 dark:text-slate-50">
+            Set up Swoop
+          </h1>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+            Four steps. Swoop reads tickets and proposes actions — it never executes anything.
+          </p>
         </div>
 
-        {/* Stepper */}
         {step !== 'done' && (
-          <div className="flex items-center justify-center mb-8">
-            {STEP_ORDER.map((s, i) => (
-              <div key={s} className="flex items-center">
-                <div className={`flex items-center gap-2 ${i <= currentIndex ? 'text-swoop-600' : 'text-gray-400'}`}>
-                  <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold border-2 transition-colors ${
-                    i < currentIndex ? 'bg-swoop-600 border-swoop-600 text-white' :
-                    i === currentIndex ? 'border-swoop-600 text-swoop-600' :
-                    'border-gray-300 text-gray-400'
-                  }`}>
-                    {i < currentIndex ? '✓' : i + 1}
+          <ol className="mb-6 flex items-center justify-between">
+            {STEPS.map((item, index) => {
+              const done = index < stepIndex;
+              const active = index === stepIndex;
+              return (
+                <li key={item.id} className="flex flex-1 items-center">
+                  <div className="flex flex-col items-center gap-1">
+                    <span
+                      className={`flex h-7 w-7 items-center justify-center rounded-full text-xs font-semibold ${
+                        done
+                          ? 'bg-emerald-600 text-white'
+                          : active
+                            ? 'bg-swoop-600 text-white'
+                            : 'bg-slate-200 text-slate-500 dark:bg-slate-800 dark:text-slate-400'
+                      }`}
+                    >
+                      {done ? <CheckIcon className="h-3.5 w-3.5" /> : index + 1}
+                    </span>
+                    <span
+                      className={`text-xs ${
+                        active ? 'font-medium text-slate-900 dark:text-slate-100' : 'text-slate-400'
+                      }`}
+                    >
+                      {item.label}
+                    </span>
                   </div>
-                  <span className="text-xs font-medium hidden sm:block">{STEP_LABELS[s]}</span>
-                </div>
-                {i < STEP_ORDER.length - 1 && (
-                  <div className={`w-8 h-0.5 mx-2 ${i < currentIndex ? 'bg-swoop-600' : 'bg-gray-300'}`} />
-                )}
-              </div>
-            ))}
-          </div>
+                  {index < STEPS.length - 1 && (
+                    <span
+                      className={`mx-2 mb-4 h-px flex-1 ${
+                        done ? 'bg-emerald-600' : 'bg-slate-200 dark:bg-slate-800'
+                      }`}
+                    />
+                  )}
+                </li>
+              );
+            })}
+          </ol>
         )}
 
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8">
+        <div className="card p-6">
           {error && (
-            <div className="bg-red-50 text-red-700 border border-red-200 rounded-lg p-3 text-sm mb-4">
-              {error}
+            <div className="mb-5">
+              <Alert tone="danger">{error}</Alert>
             </div>
           )}
 
-          {/* ── Step 1: Admin ──────────────────────────────────────────── */}
+          {/* ─── Step 1 ────────────────────────────────────────────────────── */}
           {step === 'admin' && (
             <form onSubmit={handleAdmin} className="space-y-4">
-              <h2 className="text-lg font-semibold text-gray-900">Create your admin account</h2>
+              <Heading title="Create your admin account" subtitle="This is the only account, and it stays on your server." />
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
-                <input type="email" value={adminEmail} onChange={(e) => setAdminEmail(e.target.value)}
-                  required autoFocus
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-swoop-500"
-                  placeholder="you@msp.com" />
+                <label className="label">Email</label>
+                <input
+                  type="email"
+                  value={adminEmail}
+                  onChange={(e) => setAdminEmail(e.target.value)}
+                  required
+                  autoFocus
+                  autoComplete="username"
+                  placeholder="you@msp.com"
+                  className="input"
+                />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
-                <input type="password" value={adminPassword} onChange={(e) => setAdminPassword(e.target.value)}
-                  required minLength={8}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-swoop-500"
-                  placeholder="Min. 8 characters" />
+                <label className="label">Password</label>
+                <input
+                  type="password"
+                  value={adminPassword}
+                  onChange={(e) => setAdminPassword(e.target.value)}
+                  required
+                  minLength={12}
+                  autoComplete="new-password"
+                  className="input"
+                />
+                <p className="hint">At least 12 characters.</p>
               </div>
-              <button type="submit" disabled={loading}
-                className="w-full bg-swoop-600 hover:bg-swoop-700 disabled:opacity-60 text-white font-medium py-2 px-4 rounded-lg text-sm">
-                {loading ? 'Creating account...' : 'Continue'}
+              <div>
+                <label className="label">Confirm password</label>
+                <input
+                  type="password"
+                  value={adminConfirm}
+                  onChange={(e) => setAdminConfirm(e.target.value)}
+                  required
+                  autoComplete="new-password"
+                  className="input"
+                />
+              </div>
+              <button type="submit" disabled={busy || adminPassword.length < 12} className="btn-primary w-full">
+                {busy ? <Spinner /> : null} Continue
               </button>
             </form>
           )}
 
-          {/* ── Step 2: SuperOps ───────────────────────────────────────── */}
+          {/* ─── Step 2 ────────────────────────────────────────────────────── */}
           {step === 'superops' && (
             <form onSubmit={handleSuperOps} className="space-y-4">
-              <h2 className="text-lg font-semibold text-gray-900">Connect SuperOps</h2>
-              <p className="text-sm text-gray-500">API token: SuperOps → Settings → My Profile → API Token</p>
+              <Heading
+                title="Connect SuperOps"
+                subtitle="Swoop reads tickets and posts private internal notes. It never changes a ticket's state."
+              />
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">MSP name</label>
-                <input type="text" value={mspName} onChange={(e) => setMspName(e.target.value)}
+                <label className="label">Your MSP name</label>
+                <input
+                  value={mspName}
+                  onChange={(e) => setMspName(e.target.value)}
                   required
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-swoop-500"
-                  placeholder="MightyIT" />
+                  autoFocus
+                  placeholder="MightyIT"
+                  className="input"
+                />
+                <p className="hint">Appears in the notes Swoop posts.</p>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">SuperOps subdomain</label>
-                <input type="text" value={subdomain} onChange={(e) => handleSubdomainChange(e.target.value)}
+                <label className="label">SuperOps subdomain</label>
+                <input
+                  value={subdomain}
+                  onChange={(e) => {
+                    setSubdomain(e.target.value.replace(/^https?:\/\//, '').replace(/\/.*$/, '').trim());
+                    setSuperopsTest(null);
+                  }}
                   required
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-swoop-500"
-                  placeholder="mightyit" />
-                <p className="text-xs text-gray-400 mt-1">Just your subdomain — e.g. <code>mightyit</code> (not the full URL)</p>
+                  placeholder="mightyit"
+                  className="input"
+                />
+                <p className="hint">
+                  Just the subdomain from <code>yourcompany.superops.ai</code>. A custom domain works too.
+                </p>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Data centre</label>
-                <div className="flex gap-3">
-                  {(['us', 'eu'] as const).map((r) => (
-                    <label key={r} className="flex items-center gap-2 cursor-pointer">
-                      <input type="radio" name="region" value={r} checked={superopsRegion === r} onChange={() => setSuperopsRegion(r)} className="accent-swoop-600" />
-                      <span className="text-sm text-gray-700">{r === 'us' ? 'US / Global' : 'EU'}</span>
+                <label className="label">Data centre</label>
+                <div className="flex gap-4">
+                  {(['us', 'eu'] as const).map((value) => (
+                    <label key={value} className="flex cursor-pointer items-center gap-2">
+                      <input
+                        type="radio"
+                        name="region"
+                        checked={region === value}
+                        onChange={() => {
+                          setRegion(value);
+                          setSuperopsTest(null);
+                        }}
+                        className="accent-swoop-600"
+                      />
+                      <span className="text-sm text-slate-700 dark:text-slate-300">
+                        {value === 'us' ? 'US / Global' : 'EU'}
+                      </span>
                     </label>
                   ))}
                 </div>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">API token</label>
-                <input type="password" value={superopsKey} onChange={(e) => setSuperopsKey(e.target.value)}
+                <label className="label">API token</label>
+                <input
+                  type="password"
+                  value={superopsKey}
+                  onChange={(e) => {
+                    setSuperopsKey(e.target.value);
+                    setSuperopsTest(null);
+                  }}
                   required
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-swoop-500"
-                  placeholder="Your SuperOps API token" />
+                  autoComplete="off"
+                  className="input"
+                />
+                <p className="hint">SuperOps → Settings → My Profile → API Token.</p>
               </div>
 
-              {/* Test result */}
-              {testResult && (
-                <div className={`rounded-lg p-3 text-sm border ${testResult.ok
-                  ? 'bg-green-50 text-green-700 border-green-200'
-                  : 'bg-red-50 text-red-700 border-red-200'}`}>
-                  {testResult.ok ? (
-                    <>Connected to <code className="font-mono text-xs">{testResult.endpoint}</code></>
-                  ) : (
-                    <>{testResult.error || 'Connection failed'}
-                    {testResult.endpoint && <div className="mt-1 text-xs opacity-75">Tried: {testResult.endpoint}</div>}</>
-                  )}
-                </div>
-              )}
+              {superopsTest && <SuperOpsTestResult result={superopsTest} />}
 
-              <div className="flex gap-3 items-center">
-                <button type="button" onClick={handleTestSuperOps}
-                  disabled={testing || !subdomain || !superopsKey}
-                  className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-lg hover:bg-gray-50 disabled:opacity-50">
-                  {testing ? 'Testing...' : 'Test connection'}
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  disabled={!subdomain || !superopsKey || busy}
+                  onClick={() =>
+                    void run(async () => {
+                      const res = await testSuperOps(subdomain, superopsKey, region);
+                      setSuperopsTest(res.data);
+                    })
+                  }
+                  className="btn-secondary flex-1"
+                >
+                  {busy ? <Spinner /> : null} Test connection
                 </button>
-              </div>
-              <div className="flex gap-3 pt-1">
-                <button type="button" onClick={goBack}
-                  className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-lg hover:bg-gray-50">
-                  ← Back
-                </button>
-                <button type="submit" disabled={loading}
-                  className="flex-1 bg-swoop-600 hover:bg-swoop-700 disabled:opacity-60 text-white font-medium py-2 px-4 rounded-lg text-sm">
-                  {loading ? 'Saving...' : 'Continue'}
+                <button type="submit" disabled={busy || !mspName || !subdomain || !superopsKey} className="btn-primary flex-1">
+                  Continue
                 </button>
               </div>
             </form>
           )}
 
-          {/* ── Step 3: AI ─────────────────────────────────────────────── */}
+          {/* ─── Step 3 ────────────────────────────────────────────────────── */}
           {step === 'ai' && (
             <form onSubmit={handleAi} className="space-y-4">
-              <h2 className="text-lg font-semibold text-gray-900">Configure AI provider</h2>
-              <p className="text-sm text-gray-500">Any OpenAI-compatible API: Ollama, OpenAI, Groq, etc.</p>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Base URL</label>
-                <input type="url" value={aiBaseUrl} onChange={(e) => setAiBaseUrl(e.target.value)}
-                  required
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-swoop-500"
-                  placeholder="http://localhost:11434/v1" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">API key</label>
-                <input type="password" value={aiKey} onChange={(e) => setAiKey(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-swoop-500"
-                  placeholder='ollama (or your API key)' />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Model</label>
-                <input type="text" value={aiModel} onChange={(e) => setAiModel(e.target.value)}
-                  required
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-swoop-500"
-                  placeholder="qwen3:8b" />
+              <Heading
+                title="Choose an AI provider"
+                subtitle="Any OpenAI-compatible endpoint. A local model keeps ticket content on your own hardware."
+              />
+
+              <div className="flex flex-wrap gap-2">
+                {AI_PRESETS.map((preset) => (
+                  <button
+                    key={preset.label}
+                    type="button"
+                    onClick={() => {
+                      setAiBaseUrl(preset.baseUrl);
+                      setAiModel(preset.model);
+                      setAiKey(preset.key);
+                      setAiTest(null);
+                    }}
+                    className="btn-secondary !py-1 text-xs"
+                  >
+                    {preset.label}
+                  </button>
+                ))}
               </div>
 
-              {testResult && (
-                <div className={`rounded-lg p-3 text-sm border ${testResult.ok
-                  ? 'bg-green-50 text-green-700 border-green-200'
-                  : 'bg-red-50 text-red-700 border-red-200'}`}>
-                  {testResult.ok ? 'AI is responding!' : (testResult.error || 'AI not responding — check config')}
-                </div>
+              <div>
+                <label className="label">Base URL</label>
+                <input
+                  value={aiBaseUrl}
+                  onChange={(e) => {
+                    setAiBaseUrl(e.target.value);
+                    setAiTest(null);
+                  }}
+                  required
+                  className="input"
+                />
+                <p className="hint">
+                  <code>/v1</code> is appended automatically. In Docker, use{' '}
+                  <code>http://host.docker.internal:11434</code> to reach an Ollama on the host.
+                </p>
+              </div>
+              <div>
+                <label className="label">Model</label>
+                <input
+                  value={aiModel}
+                  onChange={(e) => {
+                    setAiModel(e.target.value);
+                    setAiTest(null);
+                  }}
+                  required
+                  className="input font-mono"
+                />
+              </div>
+              <div>
+                <label className="label">
+                  API key <span className="font-normal text-slate-400">(leave blank for Ollama)</span>
+                </label>
+                <input
+                  type="password"
+                  value={aiKey}
+                  onChange={(e) => {
+                    setAiKey(e.target.value);
+                    setAiTest(null);
+                  }}
+                  autoComplete="off"
+                  className="input"
+                />
+              </div>
+
+              {aiTest && (
+                <Alert tone={aiTest.ok ? 'success' : 'danger'}>
+                  {aiTest.ok ? 'The model responded correctly.' : aiTest.error}
+                </Alert>
               )}
 
-              <div className="flex gap-3 items-center">
-                <button type="button" onClick={handleTestAi}
-                  disabled={testing || !aiBaseUrl || !aiModel}
-                  className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-lg hover:bg-gray-50 disabled:opacity-50">
-                  {testing ? 'Testing...' : 'Test connection'}
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  disabled={!aiBaseUrl || !aiModel || busy}
+                  onClick={() =>
+                    void run(async () => {
+                      const res = await testAi(aiBaseUrl, aiKey, aiModel);
+                      setAiTest(res.data);
+                    })
+                  }
+                  className="btn-secondary flex-1"
+                >
+                  {busy ? <Spinner /> : null} Test connection
                 </button>
-              </div>
-              <div className="flex gap-3 pt-1">
-                <button type="button" onClick={goBack}
-                  className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-lg hover:bg-gray-50">
-                  ← Back
-                </button>
-                <button type="submit" disabled={loading}
-                  className="flex-1 bg-swoop-600 hover:bg-swoop-700 disabled:opacity-60 text-white font-medium py-2 px-4 rounded-lg text-sm">
-                  {loading ? 'Saving...' : 'Continue'}
+                <button type="submit" disabled={busy || !aiBaseUrl || !aiModel} className="btn-primary flex-1">
+                  Continue
                 </button>
               </div>
             </form>
           )}
 
-          {/* ── Step 4: Client ─────────────────────────────────────────── */}
+          {/* ─── Step 4 ────────────────────────────────────────────────────── */}
           {step === 'client' && (
             <form onSubmit={handleClient} className="space-y-4">
-              <h2 className="text-lg font-semibold text-gray-900">Add your first client</h2>
-              <p className="text-sm text-gray-500">You can skip this and add clients from the Clients page later.</p>
+              <Heading
+                title="Add your first client"
+                subtitle="Swoop only touches clients you list here. Start with one — you can add the rest once you have seen the agreement rate."
+              />
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Client name</label>
-                <input type="text" value={clientName} onChange={(e) => setClientName(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-swoop-500"
-                  placeholder="Acme Corp" />
+                <label className="label">Client name</label>
+                <input
+                  value={clientName}
+                  onChange={(e) => setClientName(e.target.value)}
+                  required
+                  autoFocus
+                  placeholder="Acme Corp"
+                  className="input"
+                />
+                <p className="hint">Spell it as SuperOps does — it is used as a fallback match.</p>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  SuperOps Company ID <span className="text-gray-400 font-normal">(optional)</span>
+                <label className="label">
+                  SuperOps company ID <span className="font-normal text-slate-400">(recommended)</span>
                 </label>
-                <input type="text" value={clientCompanyId} onChange={(e) => setClientCompanyId(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-swoop-500"
-                  placeholder="Company ID from SuperOps" />
-                <p className="text-xs text-gray-400 mt-1">Find this in SuperOps → Clients → click a client → the ID in the URL</p>
+                <input
+                  value={clientCompanyId}
+                  onChange={(e) => setClientCompanyId(e.target.value)}
+                  className="input font-mono"
+                />
+                <p className="hint">The reliable way to match tickets. Names get renamed; IDs do not.</p>
               </div>
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input type="checkbox" checked={clientEnabled} onChange={(e) => setClientEnabled(e.target.checked)}
-                  className="w-4 h-4 rounded text-swoop-600" />
-                <span className="text-sm text-gray-700">Enable automation (start classifying tickets immediately)</span>
-              </label>
-              <div className="flex gap-3 pt-1">
-                <button type="button" onClick={goBack}
-                  className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-lg hover:bg-gray-50">
-                  ← Back
+
+              <Toggle
+                checked={clientEnabled}
+                onChange={setClientEnabled}
+                label="Start classifying straight away"
+                description="Leave this off to add the client without switching automation on yet."
+              />
+
+              <div className="flex gap-2">
+                <button type="button" onClick={() => setStep('done')} className="btn-secondary flex-1">
+                  Skip for now
                 </button>
-                <button type="button" onClick={() => setStep('done')}
-                  className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-lg hover:bg-gray-50">
-                  Skip
-                </button>
-                <button type="submit" disabled={loading}
-                  className="flex-1 bg-swoop-600 hover:bg-swoop-700 disabled:opacity-60 text-white font-medium py-2 px-4 rounded-lg text-sm">
-                  {loading ? 'Adding...' : 'Add client'}
+                <button type="submit" disabled={busy || !clientName} className="btn-primary flex-1">
+                  {busy ? <Spinner /> : null} Finish
                 </button>
               </div>
             </form>
           )}
 
-          {/* ── Done ───────────────────────────────────────────────────── */}
+          {/* ─── Done ──────────────────────────────────────────────────────── */}
           {step === 'done' && (
-            <div className="text-center space-y-4">
-              <div className="text-5xl">🎉</div>
-              <h2 className="text-xl font-semibold text-gray-900">Swoop is ready!</h2>
-              <p className="text-gray-500 text-sm">Swoop will poll SuperOps every 60 seconds, classify tickets, and post internal notes. No actions will be taken yet.</p>
-              <p className="text-gray-400 text-xs">You can edit all settings any time from the Settings page.</p>
-              <button onClick={handleFinish}
-                className="w-full bg-swoop-600 hover:bg-swoop-700 text-white font-medium py-2 px-4 rounded-lg text-sm">
-                Go to dashboard
+            <div className="space-y-5 text-center">
+              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-400">
+                <CheckIcon className="h-6 w-6" />
+              </div>
+              <div>
+                <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-50">Swoop is running</h2>
+                <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                  It will poll SuperOps on the next cycle and start classifying tickets from clients you have
+                  enabled.
+                </p>
+              </div>
+
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-left text-sm dark:border-slate-800 dark:bg-slate-900/60">
+                <p className="font-medium text-slate-800 dark:text-slate-200">What to do next</p>
+                <ol className="mt-2 list-decimal space-y-1 pl-5 text-xs text-slate-600 dark:text-slate-400">
+                  <li>
+                    On the Dashboard, hit <strong>Poll now</strong> rather than waiting for the interval.
+                  </li>
+                  <li>
+                    Open Settings → Diagnostics to confirm Swoop found a ticket body field on your schema.
+                  </li>
+                  <li>
+                    Mark each classification correct or incorrect. Twenty reviews is enough for the agreement
+                    rate on the Calibration page to mean something.
+                  </li>
+                  <li>Enable a second client once agreement is at or above 90%.</li>
+                </ol>
+              </div>
+
+              <button
+                onClick={() => {
+                  onComplete();
+                  window.location.assign('/dashboard');
+                }}
+                className="btn-primary w-full"
+              >
+                Open the dashboard
               </button>
             </div>
           )}
         </div>
       </div>
     </div>
+  );
+}
+
+function Heading({ title, subtitle }: { title: string; subtitle: string }) {
+  return (
+    <div className="mb-5">
+      <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">{title}</h2>
+      <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{subtitle}</p>
+    </div>
+  );
+}
+
+function SuperOpsTestResult({ result }: { result: ConnectionTestResult }) {
+  if (!result.ok) {
+    return (
+      <Alert tone="danger" title="Connection failed">
+        {result.error}
+      </Alert>
+    );
+  }
+  const caps = result.capabilities;
+  return (
+    <Alert tone={caps?.bodyField ? 'success' : 'warning'} title="Connected">
+      <p className="text-xs">
+        Swoop inspected your GraphQL schema and will read tickets via <code>{caps?.listQuery}</code>
+        {caps?.bodyField ? (
+          <>
+            , using <code>{caps.bodyField}</code> as the ticket body
+          </>
+        ) : (
+          ' — but found no ticket body field, so it will classify on the subject line alone'
+        )}
+        .
+      </p>
+    </Alert>
   );
 }

@@ -8,7 +8,10 @@ const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       retry: 1,
-      staleTime: 30_000,
+      staleTime: 15_000,
+      // The dashboard is a monitoring surface, so refetching on focus is what
+      // an operator expects after switching back to the tab.
+      refetchOnWindowFocus: true,
     },
   },
 });

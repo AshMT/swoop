@@ -1,30 +1,32 @@
 # Swoop — Project Plan
 
-> Last updated: 2026-06-04
-> Current phase: Phase 1 (built, not yet deployed to production)
+> Last updated: 2026-09-22
+> Current phase: Phase 1 (read-only triage) — built and verified against a mock PSA; awaiting validation against real SuperOps credentials.
 
 ---
 
-## What Is Swoop
+## What Swoop is
 
-Swoop is an open source AI helpdesk agent for MSPs. It connects to a PSA (SuperOps), classifies incoming support tickets using an AI model, and posts private internal notes proposing what action should be taken. In Phase 1 it is entirely read-only — no actions are executed. The goal is to calibrate the AI before turning on execution in Phase 2.
+An open source AI triage agent for MSPs. It reads tickets from a PSA, classifies what each is asking for, extracts the entities an action would need, and posts a private internal note proposing what a technician should do. It executes nothing.
 
-**Target user:** MightyIT (the MSP running this), their SuperOps instance, their real clients.
+**Target user:** MightyIT, their SuperOps instance, their real clients.
+
+**The thesis:** the hard part of AI triage is not classification, it is *knowing whether the classification is good enough to act on*. Swoop treats that as the product. It runs in shadow mode, collects a verdict from a technician on each classification, and reports an agreement rate — which is the number that decides whether execution is safe to turn on.
 
 ---
 
-## Tech Stack
+## Tech stack
 
-| Layer | Choice | Reason |
+| Layer | Choice | Why |
 |---|---|---|
-| Runtime | Node.js 20+ | Familiarity, good ecosystem |
-| Backend framework | Express | Simple, well-understood |
-| Database | SQLite (via Drizzle ORM) | Zero-ops, single file, easy backup |
-| Frontend | React 18 + Vite + Tailwind CSS | Fast to build, good DX |
-| AI | OpenAI-compatible REST API | Works with Ollama, OpenAI, Groq, LM Studio — no lock-in |
-| PSA | SuperOps GraphQL API | Target PSA for MightyIT |
-| M365 | CIPP (Phase 2+) | Not touched in Phase 1 |
-| Queue | In-memory (no Redis) | Sufficient for Phase 1 polling model |
+| Runtime | Node.js 20+ | Familiar, good ecosystem |
+| Backend | Express | Simple, well understood |
+| Database | SQLite via Drizzle | Zero-ops, one file, trivially backed up |
+| Frontend | React 18 + Vite + Tailwind | Fast to build, good DX |
+| AI | Any OpenAI-compatible REST API | Ollama, OpenAI, Groq, LM Studio — no lock-in |
+| PSA | SuperOps GraphQL, discovered by introspection | Field names cannot be safely hardcoded |
+| M365 | CIPP (Phase 2) | Not touched in Phase 1 |
+| Tests | Vitest + supertest | |
 | Container | Docker + GHCR | Easy self-hosting |
 
 ---
@@ -32,189 +34,226 @@ Swoop is an open source AI helpdesk agent for MSPs. It connects to a PSA (SuperO
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    Docker Container                      │
-│                                                         │
-│  ┌──────────────┐    ┌────────────────────────────┐    │
-│  │  Express     │    │  Polling Loop (60s)        │    │
-│  │  API + SPA   │    │  - Fetch tickets from      │    │
-│  │  :3000       │    │    SuperOps GraphQL         │    │
-│  └──────────────┘    │  - Match to enabled client │    │
-│                      │  - Classify with AI         │    │
-│  ┌──────────────┐    │  - Post private note        │    │
-│  │  SQLite DB   │◄───│  - Log to DB                │    │
-│  │  /data/      │    │  - Mark as processed        │    │
-│  │  swoop.db    │    └────────────────────────────┘    │
-│  └──────────────┘                                       │
-└──────────────────────────┬──────────────────────────────┘
-                           │
-              ┌────────────┴────────────┐
-              ▼                         ▼
-     SuperOps GraphQL            AI Provider
-     (tickets + notes)     (Ollama / OpenAI / Groq)
+┌──────────────────────────────────────────────────────────────┐
+│                      Docker container                        │
+│                                                              │
+│  ┌────────────────────┐   ┌──────────────────────────────┐   │
+│  │ Express API + SPA  │   │ Per-tenant poll scheduler    │   │
+│  │ :3000              │   │  1. fetch tickets (sorted,   │   │
+│  │  - auth, setup     │   │     paged, windowed)         │   │
+│  │  - clients         │   │  2. dedup against ledger     │   │
+│  │  - action log      │   │  3. match to enabled client  │   │
+│  │  - review          │   │  4. fetch body via detail    │   │
+│  │  - calibration     │   │  5. classify with AI         │   │
+│  │  - diagnostics     │   │  6. apply policy + grounding │   │
+│  └────────────────────┘   │  7. post private note        │   │
+│                           │  8. log; retry on failure    │   │
+│  ┌────────────────────┐   └──────────────────────────────┘   │
+│  │ SQLite (WAL)       │◄──────────────┘                      │
+│  │ /app/data          │                                      │
+│  └────────────────────┘                                      │
+└───────────────────────┬──────────────────────────────────────┘
+                        │
+        ┌───────────────┴────────────────┐
+        ▼                                ▼
+  SuperOps GraphQL              AI provider
+  (introspected)          (Ollama / OpenAI / Groq)
 ```
 
 ### Key design decisions
 
-**Allowlist model (not blocklist):** Swoop only processes tickets from clients explicitly enabled in the UI. Everything else is silently skipped. This prevents accidental processing of a client before they're ready for it.
+**Discover the PSA schema, never hardcode it.** The original implementation guessed SuperOps field names and the guesses were wrong. Each wrong guess cost a deploy cycle, and the git history is a run of "field not in schema" fixes. Swoop now introspects the live schema on connect and builds its queries from what exists — the ticket body field, the client field's shape, whether sorting is supported and in what form, and which note mutation the instance exposes. The result is cached per tenant and shown to the operator in Diagnostics. Where the schema lacks something, Swoop degrades explicitly and says what it could not find.
 
-**Deduplication ledger:** Every processed ticket ID is written to `processed_tickets` table. On each poll cycle, tickets already in this table are skipped. This is the primary dedup mechanism — not timestamps alone.
+**The body is not optional.** Classifying from a subject line alone is measurably worse, and an earlier version did exactly that: the list query could not project the body, so the poller passed an empty string to the model. Swoop now fetches the body from the single-ticket detail query and converts it from HTML to plain text.
 
-**Polling, not webhooks:** SuperOps webhooks require a publicly reachable endpoint. Polling every 60s is simpler, more resilient (no infrastructure dependency), and sufficient for Phase 1.
+**A model outage is not an escalation.** The fallback used to be a synthetic `ESCALATE` with confidence 0, which made a dead AI provider look like a wave of tickets the model had correctly declined — corrupting the one number Phase 1 exists to produce. Failures are now a distinct `ai_failed` status, excluded from accuracy and visible as failures in the UI.
 
-**AES-256-GCM for API keys at rest:** SuperOps and AI API keys are encrypted with the `ENCRYPTION_KEY` before writing to SQLite. The key lives only in the environment, not in the DB.
+**Claim a ticket as retryable, not as done.** The old poller marked a ticket processed *before* calling the AI, so any failure lost that ticket permanently and silently. It is now claimed with a retry timestamp, retried with backoff (60s, 5m, 15m), and after four attempts recorded as a visible failure.
 
-**AI fallback:** If the AI call fails, or the JSON response can't be parsed, the ticket is classified as `ESCALATE` with `confidence=0`. It is still logged and marked as processed (to prevent infinite retry loops).
+**Allowlist, not blocklist.** Only clients explicitly enabled are processed. Matching is by company ID first, then exact name — the previous code compared the configured *ID* against the ticket's *name*, so an ID-configured client never matched at all.
 
-**Single tenant for Phase 1:** The schema supports multiple tenants, but the UI and README assume one tenant (MightyIT). Multi-tenant is an easy Phase 3+ feature.
+**Deduplication keyed per tenant.** `processed_tickets` was keyed on `ticket_id` alone, so a second tenant with overlapping numbering would have had its tickets silently swallowed. The key is now `(tenant_id, ticket_id)`.
 
----
+**Ground the entities.** The prompt says never to invent an email address, and it also carries worked examples. A small model can copy an address out of an example. Any extracted address that does not appear in the ticket is discarded and the verdict becomes `FOLLOW_UP`: proposing an action against a user who never asked is worse than proposing nothing.
 
-## Phase 1 — Completed
+**Policy is separate from parsing.** The stored log holds what the model actually said; the confidence floor and grounding are applied afterwards and recorded as explicit adjustments, so a disagreement can be traced to either the model or the policy.
 
-**Status: Built and pushed. Workflow green. Image in GHCR (private — needs manual visibility change in GitHub UI).**
+**The note format is a setting, not a guess.** Whether a PSA renders Markdown or HTML in a note cannot be settled from outside a real instance, and guessing wrong is visible to every technician on every ticket. The note is built once as a structure and rendered into the chosen format, so the three renderers cannot drift apart, and Settings shows a worked example of each.
 
-### What's done
+**Accuracy is scoped to a prompt version.** Figures from different prompts are not comparable, and the failure mode is silent: tune the prompt to fix a confusion pair, and the agreement rate afterwards averages over both versions, so the improvement is invisible until enough new tickets dilute the old ones. Each row carries a fingerprint of the prompt-and-model combination. The fingerprint covers the template rather than the rendered prompt, so per-client context does not fragment the figures.
 
-- [x] SQLite schema + Drizzle ORM + auto-create tables on startup
-- [x] Express server with JWT auth (bcrypt passwords, 7-day tokens)
-- [x] First-run setup wizard (4 steps: admin → SuperOps → AI → first client)
-- [x] SuperOps GraphQL client (poll tickets, post private notes)
-- [x] OpenAI-compatible AI client (works with any provider)
-- [x] AI system prompt with 11 action types + JSON schema enforcement
-- [x] 60-second polling loop with deduplication
-- [x] Action log DB + dashboard UI
-- [x] Client management UI with per-client automation toggle (allowlist)
-- [x] AES-256-GCM encryption for stored secrets
-- [x] Docker + docker-compose
-- [x] GitHub Actions CI: build + push to `ghcr.io/ashmt/swoop` on push to main or feature branch
-- [x] Multi-platform image (linux/amd64 + linux/arm64)
+**Fail to start rather than start insecurely.** `JWT_SECRET` used to default to `change-me-in-production`, which meant anyone could mint a valid session for any install running the default. In production Swoop now validates its configuration and exits with a list of what is wrong.
 
-### Phase 1 success criteria (from brief)
+**Polling, not webhooks.** Webhooks need a publicly reachable endpoint. Polling is simpler, needs no inbound network, and is sufficient. The interval is per-tenant and adjustable from the UI.
 
-- [ ] Setup wizard completes, Swoop connects to SuperOps *(needs real SuperOps creds)*
-- [ ] Polling starts automatically every 60 seconds *(coded, not validated with real creds)*
-- [ ] Tickets are classified correctly *(needs 10+ real MightyIT tickets to validate)*
-- [ ] Internal notes appear in SuperOps *(needs real SuperOps creds)*
-- [ ] Dashboard shows action logs with correct classification *(UI built, needs real data)*
-- [ ] No errors/crashes over 1 week *(needs production deployment)*
-- [ ] Enable/disable clients works *(UI built and tested)*
+**Single tenant in practice.** The schema is multi-tenant throughout and the poller schedules per tenant, but the UI assumes one. Multi-tenant management is a later phase.
 
 ---
 
-## Phase 2 — Approval + Execution (Not started)
+## Phase 1 — Read-only triage
 
-### What Phase 2 adds
+**Status: complete. Verified end to end against a mock SuperOps and a mock OpenAI-compatible provider. Not yet run against real credentials.**
 
-**Approval flow:**
-- After classification, ticket goes into `awaiting_approval` state
-- Human sees the proposal in the Swoop dashboard and clicks Approve or Reject
-- Alternatively: Swoop posts the proposal as a public (or private) note to the ticket and waits for a reply from the tech (comment detection via polling)
-- High-sensitivity actions require a secondary approval regardless of the approver
+### Engine
+- [x] Per-tenant poll scheduler with configurable interval and overlap protection
+- [x] GraphQL schema introspection and adaptive query construction
+- [x] Ticket body retrieval and HTML-to-text conversion
+- [x] Sorted, paged, time-windowed ticket fetch with runtime degradation if sort is rejected
+- [x] Tenant-scoped deduplication ledger with retry and backoff
+- [x] Client matching by company ID or name
+- [x] Robust model-output parsing: reasoning traces, fences, prose, truncation, malformed JSON
+- [x] Schema validation, label canonicalisation, confidence rescaling, entity grounding
+- [x] Confidence threshold and sensitivity flag
+- [x] Private note write-back with per-row delivery status
+- [x] Preview mode (classify and log, never write back) and a global pause
+- [x] Single-ticket re-classification for prompt tuning
+- [x] Note delivery retried independently of classification, so a transient PSA
+      failure does not cost a second AI call
+- [x] Client discovery from the PSA, so company IDs need not be typed by hand
+- [x] Two-stage log retention, off by default
+- [x] Note rendered as plain text, Markdown or HTML from one shared structure,
+      with a worked preview of each
+- [x] Per-client prompt overrides, fingerprinted separately
+- [x] Bounded per-ticket concurrency, so a slow local model does not serialise
+      a morning's backlog
 
-**Execution engine:**
-- On approval, Swoop calls the relevant backend to execute the action
-- M365 actions go through CIPP (see below)
-- SuperOps status may be updated after execution
+### Calibration
+- [x] Per-classification review: correct / incorrect plus the correct label and a note
+- [x] Bulk review
+- [x] Agreement rate, review coverage, readiness verdict against the 85% / 90% guidance
+- [x] Per-classification accuracy and average confidence
+- [x] Confusion table of predicted against actual
+- [x] Confidence separation — whether confidence distinguishes right from wrong
+- [x] Latency percentiles, note delivery, daily volume
+- [x] CSV export of the full log
+- [x] Keyboard shortcuts for the review queue
+- [x] Prompt-and-model fingerprint on every row, so tuning the prompt does not
+      silently average the new figures in with the old ones
+- [x] Agreement trend against the target
 
-**CIPP integration:**
-- CIPP is the open source M365 management platform used by MSPs
-- It exposes a REST API for user management operations
-- Connection config (CIPP URL + API key) added to tenant settings in Swoop
-- Actions mapped to CIPP endpoints:
-  - `password_reset` → `POST /api/ExecResetPass`
-  - `group_add` / `group_remove` → `POST /api/ExecAddMember` / `ExecRemoveMember`
-  - `license_assign` / `license_remove` → `POST /api/ExecAssignLicense`
-  - `account_disable` / `account_enable` → `POST /api/ExecDisableUser` / `ExecEnableUser`
-  - `mfa_reset` → `POST /api/ExecResetMFA`
-  - `mailbox_permission` → `POST /api/ExecMailboxPermission`
+### Platform
+- [x] Validated configuration that refuses to boot insecurely
+- [x] Forward-only migrations with a recorded ledger, run in transactions
+- [x] AES-256-GCM with a scrypt KDF, backward compatible with the legacy envelope
+- [x] Rate limiting, security headers, JSON 404s, body limits, error handler
+- [x] Authenticated setup routes (previously fully open)
+- [x] Levelled logging with secret redaction, optional JSON output
+- [x] Graceful shutdown that lets the in-flight cycle finish
+- [x] Poll health and discovered-schema diagnostics surfaced in the UI
+- [x] 285 tests across backend and frontend, ESLint, CI gating the Docker publish on lint + typecheck + test + boot check
+- [x] Non-root container, build toolchain dropped from the runtime image
 
-**FOLLOW_UP handling:**
-- If classification is `FOLLOW_UP`, Swoop posts the `follow_up_question` as a note to the ticket
-- Polls for a reply on that ticket (comment polling, Phase 2 addition)
-- On reply, re-classifies with the additional context
+### Validation still outstanding
+These need real SuperOps credentials and cannot be closed from a dev environment:
 
-**Sensitivity ratchet:**
-- `sensitivity: high` tickets always require human approval, even if confidence is high
-- This is already captured in Phase 1 action logs — Phase 2 just acts on it
+- [ ] The schema probe resolves correctly against a live SuperOps instance
+- [ ] Internal notes appear on the right tickets, marked private
+- [ ] 20+ real classifications reviewed, and the agreement rate read
+- [ ] One week without crashes or stuck tickets
 
-### Phase 2 schema additions needed
+---
+
+## Phase 2 — Approval and execution
+
+**Entry criterion: agreement rate at or above 90% on at least 20 reviewed real tickets, holding across at least two clients.** Do not start before that. The whole point of Phase 1 is to earn this.
+
+### Approval flow
+- Classified tickets enter `awaiting_approval` instead of terminating at `classified`
+- Approve / Reject with a reason, from the dashboard
+- High sensitivity always requires approval regardless of confidence — the flag is already recorded, so this is policy on existing data
+- Actions above a configurable blast radius require a second approver
+
+### Execution engine
+- `src/services/executor.ts`, dispatching on the action type
+- M365 actions go through [CIPP](https://cipp.app):
+
+| Action | CIPP endpoint |
+|---|---|
+| `password_reset` | `POST /api/ExecResetPass` |
+| `group_add` / `group_remove` | `POST /api/ExecAddMember` / `ExecRemoveMember` |
+| `license_assign` / `license_remove` | `POST /api/ExecAssignLicense` |
+| `account_disable` / `account_enable` | `POST /api/ExecDisableUser` / `ExecEnableUser` |
+| `mfa_reset` | `POST /api/ExecResetMFA` |
+| `mailbox_permission` | `POST /api/ExecMailboxPermission` |
+
+- Every execution is logged with the request, the response and the outcome
+- Rollback guidance recorded for reversible actions
+- The PSA ticket is updated after a successful execution
+
+### FOLLOW_UP handling
+- Post the follow-up question as a public reply rather than a private note
+- Poll for a response on that ticket
+- Re-classify with the added context, and compare against the original verdict
+
+### Schema additions
 
 ```sql
--- Approval decisions
 ALTER TABLE action_logs ADD COLUMN approved_by TEXT;
 ALTER TABLE action_logs ADD COLUMN approved_at INTEGER;
 ALTER TABLE action_logs ADD COLUMN rejection_reason TEXT;
 
--- CIPP config (on tenants table or separate)
 ALTER TABLE tenants ADD COLUMN cipp_base_url TEXT;
-ALTER TABLE tenants ADD COLUMN cipp_api_key TEXT;  -- encrypted
+ALTER TABLE tenants ADD COLUMN cipp_api_key TEXT;      -- encrypted
+ALTER TABLE tenants ADD COLUMN cipp_tenant_id TEXT;
 
--- Execution log
 CREATE TABLE execution_logs (
   id TEXT PRIMARY KEY,
   action_log_id TEXT REFERENCES action_logs(id),
+  executed_by TEXT,
   executed_at INTEGER DEFAULT (unixepoch()),
-  result TEXT,  -- 'success' | 'failure'
-  response TEXT,  -- raw response from CIPP/API
+  backend TEXT,                -- 'cipp' | 'psa'
+  request TEXT,                -- redacted
+  result TEXT,                 -- 'success' | 'failure'
+  response TEXT,
   error TEXT
 );
 ```
 
-### Phase 2 API additions needed
+### API additions
+- `POST /api/actions/:id/approve`
+- `POST /api/actions/:id/reject`
+- `GET  /api/actions/:id/execution`
+- `PATCH /api/tenants/:id` — CIPP configuration
+- `POST /api/tenants/:id/test-cipp`
 
-- `POST /api/actions/:id/approve` — approve and execute
-- `POST /api/actions/:id/reject` — reject with reason
-- `GET /api/actions/:id/execution` — execution result
-- `POST /api/tenants/:id/cipp-config` — save CIPP settings
-- `POST /api/tenants/:id/test-cipp` — test CIPP connection
+### Prerequisites from Phase 3
+Multi-user with roles and an administrative audit log are **prerequisites**, not nice-to-haves: "who approved this" is meaningless with one shared account.
 
 ---
 
-## Phase 3 — Nice-to-haves (Future)
+## Phase 3 — Scale and governance
 
 - Multi-user with roles (admin, approver, read-only)
-- Email/Slack notifications when high-sensitivity tickets arrive
-- Prompt tuning UI (edit system prompt per client)
-- Audit log (who approved what, when)
-- Metrics / accuracy dashboard (classification confidence over time)
-- Webhook receiver (replace polling if SuperOps adds webhook support)
+- Administrative audit log — who changed what, when
+- Notifications (email, Slack, Teams) for high-sensitivity arrivals and execution failures
+- Per-client prompt overrides, building on the per-client context field
+- Additional PSA backends. `PSAClient` is already the seam, and the capability probe generalises
+- Webhook receiver, if SuperOps adds support, replacing the poller
 - Multi-tenant management UI
+- Accuracy trend over time, and alerting when agreement drifts below target
 
 ---
 
-## Known Risks + Open Questions
+## Risks and open questions
 
-### SuperOps GraphQL field names (HIGH — blocks real usage)
-The queries in `src/services/psa/superops.ts` use field names that are educated guesses based on API conventions. **They need to be verified against the actual SuperOps GraphQL schema before Phase 1 can be considered validated.**
+### Live schema verification (HIGH — the last Phase 1 unknown)
+The capability probe is tested against fixtures modelled on the shapes this integration has encountered, and verified end to end against a mock. It has not run against a real SuperOps instance. The probe is designed to degrade with an explicit warning rather than fail silently, so the likely outcome of a surprise is a clear message in Diagnostics — but that remains to be seen.
 
-To verify:
-1. Open SuperOps → Settings → API
-2. Use the GraphQL introspection endpoint or their API docs
-3. Compare against the queries in `superops.ts` and adjust field names
+**First action on deployment:** connect, then read Settings → Diagnostics before anything else. It names every field it resolved and everything it could not.
 
-Fields most likely to need adjustment:
-- `description` (ticket body) — may be `ticketBody`, `details`, or `body`
-- `requesterEmail` — may be nested as `requester { email }`  
-- `companyId` — may be `clientId`, `company { id }`, or `companyID`
-- `addTicketNote` mutation — may be `createNote`, `addNote`, or different field names
+### Classification accuracy (UNKNOWN — by design)
+Unmeasurable until it runs on real tickets. Swoop now measures it, which is the entire point of the phase. Budget one to two weeks.
 
-### GHCR package visibility (MEDIUM — blocks `docker pull`)
-The image `ghcr.io/ashmt/swoop:latest` has been built and pushed but is private. Changing package visibility via the API requires a PAT, not `GITHUB_TOKEN`. **Needs one manual step in GitHub UI.**
+### Note formatting in SuperOps
+Notes are plain text with blank-line structure rather than Markdown, because it is not known whether SuperOps renders Markdown in notes. If it does, the note format can be enriched.
 
-Fix: github.com/ashmt → Packages → swoop → Package settings → Change visibility → Public
-
-### AI classification accuracy (UNKNOWN — needs calibration)
-Phase 1's whole purpose is to validate classification accuracy on real MightyIT tickets. Until 10+ real tickets have been run through the system, we don't know if the model/prompt combination is good enough.
-
-Recommended approach: run Phase 1 for 1-2 weeks, export the action logs, review classification accuracy, adjust the system prompt in `src/prompts/system.ts` as needed before enabling Phase 2.
+### Local model latency
+A large local model on CPU can take tens of seconds per ticket. The AI timeout defaults to five minutes and the poll cycle is sequential, so a slow model on a busy desk will lag. If that bites, per-ticket concurrency is the fix.
 
 ---
 
 ## Repository
 
 - **Repo:** `github.com/AshMT/swoop`
-- **Main branch:** `main`
-- **Phase 1 branch:** `claude/swoop-phase-1-build-PRp7n`
 - **Container:** `ghcr.io/ashmt/swoop:latest`
 - **License:** MIT
