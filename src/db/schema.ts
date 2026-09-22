@@ -31,6 +31,12 @@ export const tenants = sqliteTable('tenants', {
   dryRun: integer('dry_run', { mode: 'boolean' }).default(false),
   /** Operator-tuned replacement for the built-in classifier prompt. */
   systemPromptOverride: text('system_prompt_override'),
+  /**
+   * Days to keep action log rows. 0 means keep forever. Ticket bodies and raw
+   * model responses are pruned first, at a third of this age, because they are
+   * the bulk of the storage and the least useful to keep.
+   */
+  logRetentionDays: integer('log_retention_days').default(0),
 
   // ─── Discovered SuperOps schema (see services/psa/schema-probe.ts) ──────────
   psaCapabilities: text('psa_capabilities'),
@@ -93,6 +99,8 @@ export const actionLogs = sqliteTable(
     /** Whether the internal note actually landed in SuperOps. */
     notePosted: integer('note_posted', { mode: 'boolean' }).default(false),
     noteError: text('note_error'),
+    /** Write-back attempts, so a failed note is retried without re-classifying. */
+    noteAttempts: integer('note_attempts').default(0),
 
     // ─── Calibration: the technician's verdict on the AI's answer ─────────────
     reviewVerdict: text('review_verdict'),
@@ -107,6 +115,7 @@ export const actionLogs = sqliteTable(
     tenantCreatedIdx: index('action_logs_tenant_created_idx').on(table.tenantId, table.createdAt),
     ticketIdx: index('action_logs_ticket_idx').on(table.ticketId),
     reviewIdx: index('action_logs_review_idx').on(table.reviewVerdict),
+    noteRetryIdx: index('action_logs_note_retry_idx').on(table.status, table.noteAttempts),
   }),
 );
 

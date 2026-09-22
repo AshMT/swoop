@@ -1,5 +1,5 @@
 import { GraphQLClient } from 'graphql-request';
-import type { ConnectionTestResult, PSAClient, PsaTicket } from './interface';
+import type { ConnectionTestResult, PSAClient, PsaCompany, PsaTicket } from './interface';
 import { probeCapabilities, CAPABILITIES_VERSION, type PsaCapabilities } from './capabilities';
 import { htmlToText } from '../../lib/html';
 import { createLogger, describeError } from '../../lib/logger';
@@ -222,6 +222,47 @@ export class SuperOpsClient implements PSAClient {
       log.warn(`Could not fetch the body for ticket ${ticket.ticketId}: ${describeError(err)}`);
     }
     return ticket;
+  }
+
+  /**
+   * Lists the MSP's clients so the UI can offer a picker.
+   *
+   * Returns null rather than throwing when the schema exposes no client list —
+   * the allowlist still works with a hand-typed company ID, so this is a
+   * convenience, not a dependency.
+   */
+  async listCompanies(): Promise<PsaCompany[] | null> {
+    const caps = await this.ensureCapabilities();
+    if (!caps.clientListQuery || !caps.clientListResultField || !caps.clientListIdField) {
+      return null;
+    }
+
+    const selection = [caps.clientListIdField, caps.clientListNameField].filter(Boolean).join(' ');
+    const arg = caps.clientListArgName
+      ? `(${caps.clientListArgName}: ${literal({ page: 1, pageSize: MAX_PAGE_SIZE })})`
+      : '';
+
+    const query = `
+      query SwoopClientList {
+        ${caps.clientListQuery}${arg} {
+          ${caps.clientListResultField} { ${selection} }
+        }
+      }
+    `;
+
+    const data = await this.request<Record<string, unknown>>(query);
+    const root = data[caps.clientListQuery] as Record<string, unknown> | undefined;
+    const rows = root?.[caps.clientListResultField];
+    if (!Array.isArray(rows)) return [];
+
+    return rows
+      .filter((row): row is Record<string, unknown> => Boolean(row) && typeof row === 'object')
+      .map((row) => ({
+        id: String(row[caps.clientListIdField!] ?? ''),
+        name: String((caps.clientListNameField && row[caps.clientListNameField]) || ''),
+      }))
+      .filter((company) => company.id && company.name)
+      .sort((a, b) => a.name.localeCompare(b.name));
   }
 
   // ─── Writes ─────────────────────────────────────────────────────────────────

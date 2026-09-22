@@ -207,3 +207,37 @@ describe('formatProposalNote', () => {
     expect(note).toContain('below the 0.75 threshold');
   });
 });
+
+/**
+ * A classification whose note failed to post has already cost an AI call, so it
+ * is retried by note attempt count rather than by re-running the classifier.
+ * These assert the boundary the poller's retry query uses.
+ */
+describe('note delivery retry window', () => {
+  const MAX_NOTE_ATTEMPTS = 5;
+
+  /** Mirrors the `status = 'note_failed' AND note_attempts <= MAX - 1` filter. */
+  const isRetryable = (status: string, attempts: number) =>
+    status === 'note_failed' && attempts <= MAX_NOTE_ATTEMPTS - 1;
+
+  it('retries a freshly failed note', () => {
+    expect(isRetryable('note_failed', 1)).toBe(true);
+  });
+
+  it('keeps retrying up to the limit', () => {
+    expect(isRetryable('note_failed', 4)).toBe(true);
+  });
+
+  it('stops at the limit rather than hammering the PSA forever', () => {
+    expect(isRetryable('note_failed', 5)).toBe(false);
+    expect(isRetryable('note_failed', 9)).toBe(false);
+  });
+
+  it('never retries a note that already landed', () => {
+    expect(isRetryable('classified', 1)).toBe(false);
+  });
+
+  it('never retries an AI failure — there is no note to post', () => {
+    expect(isRetryable('ai_failed', 1)).toBe(false);
+  });
+});

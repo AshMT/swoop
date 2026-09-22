@@ -97,6 +97,7 @@ const listColumns = {
   aiLatencyMs: actionLogs.aiLatencyMs,
   notePosted: actionLogs.notePosted,
   noteError: actionLogs.noteError,
+  noteAttempts: actionLogs.noteAttempts,
   reviewVerdict: actionLogs.reviewVerdict,
   reviewCorrectClassification: actionLogs.reviewCorrectClassification,
   reviewNote: actionLogs.reviewNote,

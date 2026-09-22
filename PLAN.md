@@ -103,6 +103,10 @@ An open source AI triage agent for MSPs. It reads tickets from a PSA, classifies
 - [x] Private note write-back with per-row delivery status
 - [x] Preview mode (classify and log, never write back) and a global pause
 - [x] Single-ticket re-classification for prompt tuning
+- [x] Note delivery retried independently of classification, so a transient PSA
+      failure does not cost a second AI call
+- [x] Client discovery from the PSA, so company IDs need not be typed by hand
+- [x] Two-stage log retention, off by default
 
 ### Calibration
 - [x] Per-classification review: correct / incorrect plus the correct label and a note
@@ -113,6 +117,7 @@ An open source AI triage agent for MSPs. It reads tickets from a PSA, classifies
 - [x] Confidence separation — whether confidence distinguishes right from wrong
 - [x] Latency percentiles, note delivery, daily volume
 - [x] CSV export of the full log
+- [x] Keyboard shortcuts for the review queue
 
 ### Platform
 - [x] Validated configuration that refuses to boot insecurely
@@ -123,7 +128,7 @@ An open source AI triage agent for MSPs. It reads tickets from a PSA, classifies
 - [x] Levelled logging with secret redaction, optional JSON output
 - [x] Graceful shutdown that lets the in-flight cycle finish
 - [x] Poll health and discovered-schema diagnostics surfaced in the UI
-- [x] 193 tests, ESLint, CI gating the Docker publish on lint + typecheck + test + boot check
+- [x] 217 tests, ESLint, CI gating the Docker publish on lint + typecheck + test + boot check
 - [x] Non-root container, build toolchain dropped from the runtime image
 
 ### Validation still outstanding

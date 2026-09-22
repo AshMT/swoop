@@ -9,6 +9,7 @@ import { rateLimit } from '../../middleware/security';
 import { encrypt } from '../../services/crypto';
 import { createPsaClient } from '../../services/psa/factory';
 import { runTenantCycle } from '../../services/poller';
+import { describeLogStorage, pruneTenantLogs } from '../../services/retention';
 import { defaultSystemPromptTemplate } from '../../prompts/system';
 import { describeError } from '../../lib/logger';
 import type { PublicTenant, Tenant } from '../../types';
@@ -58,6 +59,8 @@ const updateSchema = z.object({
   automationPaused: z.boolean().optional(),
   dryRun: z.boolean().optional(),
   systemPromptOverride: z.string().max(20_000).nullable().optional(),
+  // 0 keeps everything; the cap is ten years.
+  logRetentionDays: z.number().int().min(0).max(3650).optional(),
 });
 
 router.patch('/:id', async (req, res) => {
@@ -178,6 +181,72 @@ router.post(
     } catch (err) {
       res.status(500).json({ ok: false, error: describeError(err) });
     }
+  },
+);
+
+/**
+ * The MSP's clients as the PSA knows them, so the Clients page can offer a
+ * picker rather than asking an operator to find a company ID by hand.
+ *
+ * `available: false` means this schema exposes no client list — not an error,
+ * since the allowlist works fine with a typed ID.
+ */
+router.get(
+  '/:id/psa-clients',
+  rateLimit({ windowMs: 60_000, max: 30, keyPrefix: 'psa-clients' }),
+  async (req, res) => {
+    const [tenant] = await db.select().from(tenants).where(eq(tenants.id, req.params.id)).limit(1);
+    if (!tenant) {
+      res.status(404).json({ error: 'Tenant not found' });
+      return;
+    }
+    try {
+      const companies = await createPsaClient(tenant).listCompanies();
+      if (companies === null) {
+        res.json({
+          available: false,
+          companies: [],
+          reason: 'This SuperOps schema exposes no client list query, so company IDs must be entered by hand.',
+        });
+        return;
+      }
+      res.json({ available: true, companies });
+    } catch (err) {
+      res.status(502).json({ available: false, companies: [], error: describeError(err) });
+    }
+  },
+);
+
+/** Action log size, so an operator can see what retention would reclaim. */
+router.get('/:id/log-storage', async (req, res) => {
+  const [tenant] = await db
+    .select({ id: tenants.id, logRetentionDays: tenants.logRetentionDays })
+    .from(tenants)
+    .where(eq(tenants.id, req.params.id))
+    .limit(1);
+  if (!tenant) {
+    res.status(404).json({ error: 'Tenant not found' });
+    return;
+  }
+  const storage = await describeLogStorage(tenant.id);
+  res.json({ ...storage, logRetentionDays: tenant.logRetentionDays ?? 0 });
+});
+
+/** Runs retention now rather than waiting for the six-hourly timer. */
+router.post(
+  '/:id/prune-logs',
+  rateLimit({ windowMs: 60_000, max: 5, keyPrefix: 'prune-logs' }),
+  async (req, res) => {
+    const [tenant] = await db.select().from(tenants).where(eq(tenants.id, req.params.id)).limit(1);
+    if (!tenant) {
+      res.status(404).json({ error: 'Tenant not found' });
+      return;
+    }
+    if (!tenant.logRetentionDays || tenant.logRetentionDays <= 0) {
+      res.status(400).json({ error: 'Set a retention window before pruning.' });
+      return;
+    }
+    res.json({ ok: true, ...(await pruneTenantLogs(tenant)) });
   },
 );
 

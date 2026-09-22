@@ -20,6 +20,12 @@ interface Props {
   confidenceThreshold: number | null;
   selected: boolean;
   onSelect: (id: string, selected: boolean) => void;
+  /** Expansion is parent-controlled so a keyboard shortcut can drive it. */
+  expanded: boolean;
+  onToggleExpanded: (id: string) => void;
+  /** The row the keyboard is on. */
+  focused: boolean;
+  onFocus: (id: string) => void;
 }
 
 export default function ActionRow({
@@ -29,8 +35,11 @@ export default function ActionRow({
   confidenceThreshold,
   selected,
   onSelect,
+  expanded,
+  onToggleExpanded,
+  focused,
+  onFocus,
 }: Props) {
-  const [expanded, setExpanded] = useState(false);
   const [correctLabel, setCorrectLabel] = useState(log.reviewCorrectClassification ?? '');
   const [reviewNote, setReviewNote] = useState(log.reviewNote ?? '');
   const [ticketUrl, setTicketUrl] = useState<string | null>(log.ticketUrl ?? null);
@@ -88,7 +97,8 @@ export default function ActionRow({
   /** The deep link is built server-side, so fetch it when the row opens. */
   const expand = async () => {
     const next = !expanded;
-    setExpanded(next);
+    onFocus(log.id);
+    onToggleExpanded(log.id);
     if (next && !ticketUrl) {
       try {
         const res = await getAction(log.id);
@@ -101,7 +111,15 @@ export default function ActionRow({
 
   return (
     <>
-      <tr className="border-b border-slate-100 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800/40">
+      <tr
+        data-action-row={log.id}
+        onMouseDown={() => onFocus(log.id)}
+        className={`border-b border-slate-100 dark:border-slate-800 ${
+          focused
+            ? 'bg-swoop-50 ring-1 ring-inset ring-swoop-400 dark:bg-swoop-950/40 dark:ring-swoop-700'
+            : 'hover:bg-slate-50 dark:hover:bg-slate-800/40'
+        }`}
+      >
         <td className="px-3 py-3">
           <input
             type="checkbox"
@@ -122,7 +140,11 @@ export default function ActionRow({
           </div>
           <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
             {log.sensitivity === 'high' && <Badge tone="danger">High sensitivity</Badge>}
-            {log.status === 'note_failed' && <Badge tone="warning">Note not posted</Badge>}
+            {log.status === 'note_failed' && (
+              <Badge tone="warning">
+                {log.noteAttempts && log.noteAttempts >= 5 ? 'Note failed' : 'Note retrying'}
+              </Badge>
+            )}
             {failed && <Badge tone="danger">AI failed</Badge>}
             {log.requesterEmail && (
               <span className="truncate text-xs text-slate-400 dark:text-slate-500">{log.requesterEmail}</span>
@@ -172,7 +194,7 @@ export default function ActionRow({
                     review.mutate(null);
                   } else {
                     // Opening the row is how the correct label gets chosen.
-                    setExpanded(true);
+                    if (!expanded) onToggleExpanded(log.id);
                     review.mutate('incorrect');
                   }
                 }}
@@ -250,7 +272,18 @@ export default function ActionRow({
                   <dl className="space-y-1 text-xs">
                     <Row label="Model" value={log.aiModel ?? '—'} mono />
                     <Row label="Latency" value={formatDuration(log.aiLatencyMs)} />
-                    <Row label="Note posted" value={log.notePosted ? 'Yes' : 'No'} />
+                    <Row
+                      label="Note posted"
+                      value={
+                        log.notePosted
+                          ? log.noteAttempts && log.noteAttempts > 1
+                            ? `Yes, on attempt ${log.noteAttempts}`
+                            : 'Yes'
+                          : log.noteAttempts && log.noteAttempts > 1
+                            ? `No — ${log.noteAttempts} attempts`
+                            : 'No'
+                      }
+                    />
                     <Row label="Ticket ID" value={log.ticketId} mono />
                   </dl>
                   <div className="mt-3 flex flex-wrap gap-2">

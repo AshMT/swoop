@@ -101,6 +101,7 @@ So Swoop does not guess. On connect it **introspects your live GraphQL schema** 
 - whether `client` is a nested object or a bare string, and which sub-field holds the ID
 - whether the list input supports sorting, and in what shape
 - which note mutation exists — the newer `createNote` with `workItem` addressing, or the older `createTicketNote`
+- whether the instance can list your clients, which is what makes the client picker work
 
 Then it builds its queries from what it found, and shows you the result under **Settings → Diagnostics**. If your schema lacks something important — no ticket body field, no note mutation — Swoop says so in plain language rather than failing silently. If a sorted query is rejected at runtime, it degrades to walking pages unsorted instead of returning nothing.
 
@@ -131,6 +132,8 @@ Swoop only reads tickets from clients you explicitly enable. Everything else is 
 
 Tickets are matched to a client by **SuperOps company ID** first, then by exact client name. Use the company ID — names get renamed.
 
+If your SuperOps schema exposes a client list, the Add client form offers a **picker** that fills in the name and company ID for you, and leaves out clients you have already added. If it does not, type the ID by hand — the allowlist works either way.
+
 Each client can also carry **context for the AI**: naming conventions, who counts as a VIP, which MFA provider they use. This gets added to the prompt for that client's tickets, and it is the single change that moves classifications the most:
 
 > Email addresses are firstname.lastname@acme.com. The finance team are all VIPs — treat anything from them as high sensitivity. They use Duo, not Microsoft Authenticator.
@@ -150,6 +153,8 @@ This is the part that matters, and the part most tools skip.
 
 The Calibration page also tells you whether confidence is worth anything for your ticket mix, by comparing average confidence on the answers that turned out right against the ones that turned out wrong. If those two numbers are close, raising the confidence threshold will mostly just escalate correct answers, and you should lean on the sensitivity flag instead.
 
+Reviewing is the one genuinely repetitive task here, so it has keyboard shortcuts — press **?** on the Dashboard. `j`/`k` move, `y` and `n` record a verdict and advance automatically, `x` clears one.
+
 Export the full log as CSV at any point for offline analysis.
 
 ---
@@ -162,6 +167,7 @@ Under **Settings → Behaviour**:
 - **Preview mode** — classify and log, but never write back to the PSA.
 - **Poll interval** — 15 to 3600 seconds. 60 suits most desks.
 - **Confidence threshold** — anything the model is less sure of is escalated instead.
+- **Log retention** — off by default. Every log row keeps the full ticket body and the raw model response, which is what makes the log useful for debugging and also what makes it grow without bound. With a window set, the bulky text is cleared at a third of it and the row deleted at the end; the classification and your review survive the first stage, so accuracy figures are unaffected. The panel shows how much text is currently stored.
 
 **Settings → Diagnostics** shows poll health, the last error in full, and the discovered schema. Poll failures also appear as a banner across the top of the app, because an operator whose API token expired should not have to read container logs to find out.
 
@@ -174,7 +180,7 @@ Under **Settings → Behaviour**:
 | PSA unreachable or token rejected | Poll marked failed with the cause; the watermark does not advance, so no window is skipped |
 | AI provider down | Ticket queued for retry with backoff (60s, 5m, 15m, then given up on and logged as a failure) |
 | Model returns unparseable output | One retry with a correction, then recorded as an AI failure, excluded from accuracy |
-| Note cannot be posted | Classification still logged, row flagged `note_failed` |
+| Note cannot be posted | Classification still logged and the note retried on later cycles, up to five attempts — the AI call is not repeated |
 | Model invents an email address that is not in the ticket | Address discarded and the verdict changed to `FOLLOW_UP` — an action against a user who never asked is worse than no action |
 | Swoop restarted mid-cycle | `SIGTERM` lets the in-flight cycle finish, so no ticket is left claimed but unclassified |
 | Same ticket seen twice | Deduplication ledger, keyed per tenant |

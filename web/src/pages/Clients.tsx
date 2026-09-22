@@ -5,6 +5,7 @@ import {
   deleteClient,
   errorMessage,
   getClients,
+  getPsaClients,
   getTenants,
   updateClient,
   type Client,
@@ -101,6 +102,7 @@ export default function Clients() {
       {showAdd && (
         <ClientForm
           tenantId={tenantId}
+          existing={clients}
           onClose={() => setShowAdd(false)}
           onSaved={() => {
             setShowAdd(false);
@@ -113,6 +115,7 @@ export default function Clients() {
       {editing && (
         <ClientForm
           tenantId={tenantId}
+          existing={clients}
           client={editing}
           onClose={() => setEditing(null)}
           onSaved={() => {
@@ -224,11 +227,13 @@ export default function Clients() {
 function ClientForm({
   tenantId,
   client,
+  existing,
   onClose,
   onSaved,
 }: {
   tenantId: string;
   client?: Client;
+  existing: Client[];
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -237,6 +242,22 @@ function ClientForm({
   const [contextNotes, setContextNotes] = useState(client?.contextNotes ?? '');
   const [enabled, setEnabled] = useState(client?.automationEnabled ?? false);
   const [error, setError] = useState('');
+
+  // Offered as a picker when the SuperOps schema exposes a client list, which
+  // saves the operator hunting for a company ID. Falls back to typing.
+  const { data: psa, isLoading: psaLoading } = useQuery({
+    queryKey: ['psa-clients', tenantId],
+    queryFn: () => getPsaClients(tenantId).then((r) => r.data),
+    // A wrong company ID is silent — the client simply never matches — so it is
+    // worth one request, but not worth retrying if SuperOps is unhappy.
+    retry: false,
+    staleTime: 5 * 60_000,
+  });
+
+  const alreadyAdded = new Set(
+    existing.filter((c) => c.id !== client?.id).map((c) => c.superopsCompanyId ?? ''),
+  );
+  const pickable = (psa?.companies ?? []).filter((c) => !alreadyAdded.has(c.id));
 
   const save = useMutation({
     mutationFn: () =>
@@ -279,6 +300,42 @@ function ClientForm({
         }}
         className="space-y-4"
       >
+        {psa?.available && pickable.length > 0 && (
+          <div>
+            <label className="label">Pick from SuperOps</label>
+            <select
+              value=""
+              onChange={(e) => {
+                const chosen = pickable.find((c) => c.id === e.target.value);
+                if (!chosen) return;
+                setName(chosen.name);
+                setCompanyId(chosen.id);
+              }}
+              className="input"
+            >
+              <option value="">
+                {psaLoading ? 'Loading your SuperOps clients…' : 'Choose a client…'}
+              </option>
+              {pickable.map((company) => (
+                <option key={company.id} value={company.id}>
+                  {company.name}
+                </option>
+              ))}
+            </select>
+            <p className="hint">
+              Fills in the name and company ID for you. Clients you have already added are left out.
+            </p>
+          </div>
+        )}
+
+        {psa && !psa.available && (
+          <p className="hint !mt-0">
+            {psa.error
+              ? `Could not list your SuperOps clients: ${psa.error}`
+              : (psa.reason ?? 'Enter the company ID by hand.')}
+          </p>
+        )}
+
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
             <label className="label">Client name</label>

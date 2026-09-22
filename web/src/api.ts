@@ -72,6 +72,7 @@ export interface Tenant {
   automationPaused: boolean | null;
   dryRun: boolean | null;
   systemPromptOverride: string | null;
+  logRetentionDays: number | null;
   psaCapabilitiesProbedAt: number | null;
   lastPollStatus: string | null;
   lastPollError: string | null;
@@ -121,6 +122,7 @@ export interface ActionLog {
   aiLatencyMs: number | null;
   notePosted: boolean | null;
   noteError: string | null;
+  noteAttempts?: number | null;
   reviewVerdict: ReviewVerdict | null;
   reviewCorrectClassification: string | null;
   reviewNote: string | null;
@@ -194,6 +196,7 @@ export interface PsaCapabilities {
   detailQuery: string | null;
   noteMutation: string | null;
   noteContentField: string | null;
+  clientListQuery: string | null;
   sortClause: { attribute: string; order: string } | null;
   client: { shape: string; fieldName: string | null; idField: string | null; labelField: string | null };
   requester: { shape: string; fieldName: string | null; labelField: string | null };
@@ -313,6 +316,31 @@ export const pollNow = (id: string) =>
   api.post<{ ok: boolean; summary?: PollSummary; error?: string | null }>(`/tenants/${id}/poll-now`);
 
 export const getDefaultPrompt = (id: string) => api.get<{ prompt: string }>(`/tenants/${id}/default-prompt`);
+
+export interface PsaCompany {
+  id: string;
+  name: string;
+}
+
+export interface LogStorage {
+  rows: number;
+  oldestAt: number | null;
+  bodyBytes: number;
+  totalBytes: number;
+  logRetentionDays: number;
+}
+
+export const getLogStorage = (id: string) => api.get<LogStorage>(`/tenants/${id}/log-storage`);
+
+export const pruneLogs = (id: string) =>
+  api.post<{ ok: boolean; bodiesCleared: number; rowsDeleted: number; ledgerRowsDeleted: number }>(
+    `/tenants/${id}/prune-logs`,
+  );
+
+export const getPsaClients = (id: string) =>
+  api.get<{ available: boolean; companies: PsaCompany[]; reason?: string; error?: string }>(
+    `/tenants/${id}/psa-clients`,
+  );
 
 // ─── Clients ──────────────────────────────────────────────────────────────────
 export const getClients = (tenantId?: string) =>

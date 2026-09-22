@@ -50,15 +50,15 @@ The image builds and pushes but is private, so `docker pull ghcr.io/ashmt/swoop:
 
 ## Known gaps, roughly by value
 
-- [ ] **Client picker from SuperOps.** The company ID has to be typed by hand. Add a companies query to the capability probe and offer a dropdown in the Clients form. Highest-value remaining papercut.
+- [x] **Client picker from SuperOps.** The probe now discovers a client list query, and the Add client form offers a dropdown that fills in the name and company ID.
+- [x] **Retry the note, not just the classification.** A classification whose note failed to post is retried on later cycles, up to five attempts, without repeating the AI call.
+- [x] **Log retention.** Configurable per tenant, two-stage: bulky text cleared at a third of the window, row deleted at the end. Off by default.
+- [x] **Review keyboard shortcuts.** `?` on the Dashboard. `j`/`k` to move, `y`/`n` to record a verdict and advance, `x` to clear.
 - [ ] **Per-ticket concurrency.** The cycle is sequential, so a slow local model on a busy desk lags behind. Add a small worker pool with a configurable width.
 - [ ] **Markdown in notes.** Notes are plain text because it is unknown whether SuperOps renders Markdown in them. Check against a real instance; if it does, enrich the format.
 - [ ] **Per-client prompt overrides.** Per-client *context* exists; a full per-client prompt does not.
-- [ ] **Retry the note, not just the classification.** A classification that succeeded but whose note failed to post is flagged `note_failed` and left. It should retry the note without re-billing the AI call.
-- [ ] **Log retention.** `action_logs` stores each ticket body and raw model response and grows without bound. Add a configurable retention window.
 - [ ] **Prompt version on each row.** When the prompt changes, older rows become incomparable. Stamp a prompt hash on each classification so the Calibration page can scope to one version.
 - [ ] **Accuracy trend.** Daily volume is charted; agreement rate over time is not.
-- [ ] **Review keyboard shortcuts.** Reviewing is the main repetitive task; j/k/y/n would make a session much faster.
 
 ## Deferred deliberately
 

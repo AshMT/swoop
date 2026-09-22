@@ -178,6 +178,27 @@ export const migrations: Migration[] = [
       `);
     },
   },
+
+  {
+    id: '005_note_delivery_retries',
+    up: (db) => {
+      addColumnIfMissing(db, 'action_logs', 'note_attempts', 'INTEGER DEFAULT 0');
+      // A row whose note landed had one successful attempt; one that failed had
+      // one failed attempt. Either way the historical count is 1.
+      db.exec(`UPDATE action_logs SET note_attempts = 1 WHERE note_attempts IS NULL OR note_attempts = 0`);
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS action_logs_note_retry_idx
+          ON action_logs (status, note_attempts);
+      `);
+    },
+  },
+
+  {
+    id: '006_log_retention',
+    up: (db) => {
+      addColumnIfMissing(db, 'tenants', 'log_retention_days', 'INTEGER DEFAULT 0');
+    },
+  },
 ];
 
 /**

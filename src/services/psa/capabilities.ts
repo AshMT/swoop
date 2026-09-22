@@ -3,6 +3,7 @@ import {
   TYPE_REF_FRAGMENT,
   namedType,
   isLeafType,
+  isListType,
   pickField,
   pickFields,
   type FieldInfo,
@@ -12,7 +13,7 @@ import { createLogger, describeError } from '../../lib/logger';
 const log = createLogger('SuperOps:probe');
 
 /** Version stamp — bump to force a re-probe after changing the probe logic. */
-export const CAPABILITIES_VERSION = 2;
+export const CAPABILITIES_VERSION = 3;
 
 export interface ObjectFieldShape {
   /** 'leaf' needs no sub-selection; 'object' does; 'missing' means absent. */
@@ -69,6 +70,13 @@ export interface PsaCapabilities {
   /** Ticket fields only available on the detail query. */
   detailOnlyFields: string[];
 
+  /** Root query listing the MSP's clients, so the UI can offer a picker. */
+  clientListQuery: string | null;
+  clientListArgName: string | null;
+  clientListResultField: string | null;
+  clientListIdField: string | null;
+  clientListNameField: string | null;
+
   /** Mutation that posts a note, e.g. 'createNote' or 'createTicketNote'. */
   noteMutation: string | null;
   noteArgName: string | null;
@@ -90,6 +98,15 @@ export interface PsaCapabilities {
 // ─── Candidate names, most-likely first ────────────────────────────────────────
 const LIST_QUERY_CANDIDATES = ['getTicketList', 'getTickets', 'ticketList', 'tickets'];
 const DETAIL_QUERY_CANDIDATES = ['getTicket', 'ticket'];
+const CLIENT_LIST_CANDIDATES = [
+  'getClientList',
+  'getClients',
+  'getAccountList',
+  'clientList',
+  'clients',
+  'accounts',
+];
+const CLIENT_LIST_RESULT_CANDIDATES = ['clients', 'accounts', 'items', 'data', 'results', 'records'];
 const NOTE_MUTATION_CANDIDATES = [
   'createNote',
   'createTicketNote',
@@ -200,6 +217,11 @@ export async function probeCapabilities(
     detailArgName: null,
     detailArgIdField: null,
     detailOnlyFields: [],
+    clientListQuery: null,
+    clientListArgName: null,
+    clientListResultField: null,
+    clientListIdField: null,
+    clientListNameField: null,
     noteMutation: null,
     noteArgName: null,
     noteInputType: null,
@@ -315,6 +337,49 @@ export async function probeCapabilities(
     warnings.push(
       `No ticket body field found (looked for: ${BODY_CANDIDATES.slice(0, 5).join(', ')}). Classification will use the subject line only, which measurably reduces accuracy.`,
     );
+  }
+
+  // ─── Client list, used to offer a picker instead of hand-typed IDs ──────────
+  const clientListField = findRootField(queryFields, CLIENT_LIST_CANDIDATES);
+  if (clientListField) {
+    caps.clientListQuery = clientListField.name;
+    caps.clientListArgName = clientListField.args?.[0]?.name ?? null;
+
+    const payloadTypeName = namedType(clientListField.type).name;
+    if (payloadTypeName) {
+      const payload = await describeType(payloadTypeName);
+      const payloadFields = payload?.fields ?? [];
+      // The payload may be the list wrapper, or the client array directly.
+      const arrayField =
+        payloadFields.find((f) => CLIENT_LIST_RESULT_CANDIDATES.includes(f.name)) ??
+        payloadFields.find((f) => !isLeafType(f.type) && isListType(f.type));
+
+      if (arrayField) {
+        caps.clientListResultField = arrayField.name;
+        const clientTypeName = namedType(arrayField.type).name;
+        if (clientTypeName) {
+          const clientType = await describeType(clientTypeName);
+          const scalarNames = (clientType?.fields ?? [])
+            .filter((f) => isLeafType(f.type))
+            .map((f) => f.name);
+          caps.clientListIdField = pickField(scalarNames, ['accountId', 'clientId', 'companyId', 'id']);
+          caps.clientListNameField = pickField(scalarNames, [
+            'name',
+            'accountName',
+            'clientName',
+            'companyName',
+            'displayName',
+          ]);
+        }
+      }
+    }
+
+    if (!caps.clientListIdField || !caps.clientListNameField) {
+      warnings.push(
+        'A client list query exists but its id or name field could not be resolved, so the client picker is unavailable. Company IDs can still be entered by hand.',
+      );
+      caps.clientListQuery = null;
+    }
   }
 
   // ─── Note mutation ──────────────────────────────────────────────────────────

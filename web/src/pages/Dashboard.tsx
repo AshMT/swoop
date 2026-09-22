@@ -10,9 +10,12 @@ import {
   getClients,
   getTenants,
   pollNow,
+  reviewAction,
   type ActionQuery,
   type Client,
+  type ReviewVerdict,
 } from '../api';
+import { REVIEW_SHORTCUTS, useReviewShortcuts } from '../lib/useReviewShortcuts';
 import ActionRow from '../components/ActionRow';
 import {
   Badge,
@@ -40,6 +43,9 @@ export default function Dashboard() {
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [page, setPage] = useState(0);
   const [selected, setSelected] = useState<string[]>([]);
+  const [focusedId, setFocusedId] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [showShortcuts, setShowShortcuts] = useState(false);
 
   // Debounced so typing does not fire a request per keystroke.
   useEffect(() => {
@@ -51,6 +57,8 @@ export default function Dashboard() {
   useEffect(() => {
     setPage(0);
     setSelected([]);
+    setFocusedId(null);
+    setExpandedId(null);
   }, [filterClient, filterClassification, filterReview, filterSensitivity, debouncedSearch]);
 
   const { data: tenants } = useQuery({ queryKey: ['tenants'], queryFn: () => getTenants().then((r) => r.data) });
@@ -144,6 +152,66 @@ export default function Dashboard() {
   const items = actions?.items ?? [];
   const total = actions?.total ?? 0;
   const allOnPageSelected = items.length > 0 && items.every((item) => selected.includes(item.id));
+
+  // ─── Keyboard review ────────────────────────────────────────────────────────
+  const focusedIndex = items.findIndex((item) => item.id === focusedId);
+
+  const moveFocus = (delta: number) => {
+    if (items.length === 0) return;
+    const next = focusedIndex === -1 ? 0 : Math.min(items.length - 1, Math.max(0, focusedIndex + delta));
+    const target = items[next];
+    setFocusedId(target.id);
+    document
+      .querySelector(`[data-action-row="${target.id}"]`)
+      ?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  };
+
+  const reviewFocused = async (verdict: ReviewVerdict | null) => {
+    const target = focusedIndex === -1 ? items[0] : items[focusedIndex];
+    if (!target || target.status === 'ai_failed') return;
+    try {
+      await reviewAction(target.id, { verdict });
+      void queryClient.invalidateQueries({ queryKey: ['actions'] });
+      void queryClient.invalidateQueries({ queryKey: ['stats'] });
+      void queryClient.invalidateQueries({ queryKey: ['calibration'] });
+      // Advance automatically: the point of the shortcuts is to get through a
+      // queue, and stopping on each row to press j defeats that.
+      if (verdict !== null) moveFocus(1);
+    } catch (err) {
+      toast.error(errorMessage(err, 'Could not save the review'));
+    }
+  };
+
+  useReviewShortcuts(
+    {
+      onNext: () => moveFocus(1),
+      onPrevious: () => moveFocus(-1),
+      onCorrect: () => void reviewFocused('correct'),
+      onIncorrect: () => void reviewFocused('incorrect'),
+      onClear: () => void reviewFocused(null),
+      onToggleExpand: () => {
+        const target = focusedIndex === -1 ? items[0] : items[focusedIndex];
+        if (target) setExpandedId((current) => (current === target.id ? null : target.id));
+      },
+    },
+    items.length > 0 && !showShortcuts,
+  );
+
+  // '?' is handled here rather than in the hook so the overlay can close itself.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
+      if (event.key === '?') {
+        event.preventDefault();
+        setShowShortcuts((open) => !open);
+      } else if (event.key === 'Escape') {
+        setShowShortcuts(false);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   const handleExport = async () => {
     try {
@@ -291,7 +359,50 @@ export default function Dashboard() {
         )}
 
         {isFetching && !isLoading && <Spinner className="h-4 w-4 text-slate-400" />}
+
+        <button
+          onClick={() => setShowShortcuts(true)}
+          className="btn-ghost ml-auto !py-1 text-xs"
+          title="Keyboard shortcuts"
+        >
+          Press <kbd className="mx-1 rounded border border-slate-300 px-1 font-mono dark:border-slate-600">?</kbd>{' '}
+          for shortcuts
+        </button>
       </div>
+
+      {showShortcuts && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 animate-fade-in"
+          onClick={() => setShowShortcuts(false)}
+        >
+          <div
+            role="dialog"
+            aria-label="Keyboard shortcuts"
+            className="card w-full max-w-sm p-5 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="text-base font-semibold text-slate-900 dark:text-slate-50">Review shortcuts</h2>
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              Marking a verdict moves to the next ticket automatically.
+            </p>
+            <dl className="mt-4 space-y-2">
+              {REVIEW_SHORTCUTS.map((shortcut) => (
+                <div key={shortcut.keys} className="flex items-center justify-between gap-4 text-sm">
+                  <dt className="text-slate-600 dark:text-slate-400">{shortcut.description}</dt>
+                  <dd>
+                    <kbd className="rounded border border-slate-300 bg-slate-50 px-1.5 py-0.5 font-mono text-xs text-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                      {shortcut.keys}
+                    </kbd>
+                  </dd>
+                </div>
+              ))}
+            </dl>
+            <button onClick={() => setShowShortcuts(false)} className="btn-secondary mt-5 w-full">
+              Close
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ─── Bulk review bar ──────────────────────────────────────────────── */}
       {selected.length > 0 && (
@@ -377,6 +488,10 @@ export default function Dashboard() {
                           isSelected ? [...current, id] : current.filter((x) => x !== id),
                         )
                       }
+                      expanded={expandedId === log.id}
+                      onToggleExpanded={(id) => setExpandedId((current) => (current === id ? null : id))}
+                      focused={focusedId === log.id}
+                      onFocus={setFocusedId}
                     />
                   ))}
                 </tbody>

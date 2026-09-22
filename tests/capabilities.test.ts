@@ -122,6 +122,29 @@ describe('probeCapabilities', () => {
     expect(caps.detailQuery).toBeNull();
     expect(caps.listQuery).toBe('getTicketList');
   });
+
+  // Without this, an operator has to find each company ID in SuperOps by hand.
+  it('discovers the client list query so the UI can offer a picker', async () => {
+    const caps = await probe({ clientList: 'wrapped' });
+    expect(caps.clientListQuery).toBe('getClientList');
+    expect(caps.clientListResultField).toBe('clients');
+    expect(caps.clientListIdField).toBe('accountId');
+    expect(caps.clientListNameField).toBe('name');
+  });
+
+  it('disables the picker, with a warning, when the client fields are unresolvable', async () => {
+    const caps = await probe({ clientList: 'unusable' });
+    expect(caps.clientListQuery).toBeNull();
+    expect(caps.warnings.join(' ')).toMatch(/client picker is unavailable/i);
+    // The allowlist still works with a typed ID, so this is not fatal.
+    expect(caps.listQuery).toBe('getTicketList');
+  });
+
+  it('copes with no client list query at all', async () => {
+    const caps = await probe({ clientList: 'absent' });
+    expect(caps.clientListQuery).toBeNull();
+    expect(caps.listQuery).toBe('getTicketList');
+  });
 });
 
 describe('buildListQuery', () => {

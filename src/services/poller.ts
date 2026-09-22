@@ -10,6 +10,7 @@ import type { PsaTicket } from './psa/interface';
 import { classifyTicket, applyPolicy, AiError } from './ai';
 import { formatProposalNote } from './note-format';
 import { matchTicketToClient, emptySummary, type PollSummary } from './matching';
+import { pruneAllTenants } from './retention';
 import { createLogger, describeError } from '../lib/logger';
 import type { Client, Tenant } from '../types';
 
@@ -19,6 +20,8 @@ const log = createLogger('Poller');
 const MAX_ATTEMPTS = 4;
 /** Backoff before a failed ticket is retried, by attempt number. */
 const RETRY_BACKOFF_SECONDS = [60, 300, 900];
+/** How many times to retry posting a note whose classification succeeded. */
+const MAX_NOTE_ATTEMPTS = 5;
 
 type TenantId = string;
 
@@ -34,6 +37,10 @@ let supervisorTimer: ReturnType<typeof setInterval> | null = null;
 
 /** How often the supervisor reconciles schedules against the tenant table. */
 const SUPERVISOR_INTERVAL_MS = 30_000;
+/** Log pruning is housekeeping, so it runs on a much slower timer. */
+const RETENTION_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
+let retentionTimer: ReturnType<typeof setInterval> | null = null;
 
 export function startPoller(): void {
   if (running) return;
@@ -41,6 +48,13 @@ export function startPoller(): void {
   log.info('Starting');
   void reconcile();
   supervisorTimer = setInterval(() => void reconcile(), SUPERVISOR_INTERVAL_MS);
+
+  // Prune once shortly after start so a long-running install does not have to
+  // wait six hours after an operator first sets a retention window.
+  const firstPrune = setTimeout(() => void pruneAllTenants(), 60_000);
+  firstPrune.unref?.();
+  retentionTimer = setInterval(() => void pruneAllTenants(), RETENTION_INTERVAL_MS);
+  retentionTimer.unref?.();
 }
 
 /**
@@ -55,6 +69,10 @@ export async function stopPoller(timeoutMs = 20_000): Promise<void> {
   if (supervisorTimer) {
     clearInterval(supervisorTimer);
     supervisorTimer = null;
+  }
+  if (retentionTimer) {
+    clearInterval(retentionTimer);
+    retentionTimer = null;
   }
   for (const schedule of schedules.values()) clearTimeout(schedule.timer);
   schedules.clear();
@@ -206,6 +224,12 @@ export async function runTenantCycle(tenant: Tenant): Promise<PollSummary> {
 
     summary.fetched = tickets.length;
 
+    // A classification whose note failed to post has already cost an AI call,
+    // so retry just the note rather than re-running the whole thing.
+    if (!tenant.dryRun) {
+      await retryUndeliveredNotes(tenant, psa);
+    }
+
     // Retry any ticket that previously failed and is now past its backoff.
     const retryable = await loadRetryableTickets(tenant.id);
     const retrySet = new Set(retryable);
@@ -244,6 +268,56 @@ export async function runTenantCycle(tenant: Tenant): Promise<PollSummary> {
     return summary;
   } finally {
     inFlight.delete(tenant.id);
+  }
+}
+
+/**
+ * Re-posts notes for classifications that succeeded but whose write-back
+ * failed, most often a transient PSA error or a rate limit. The classification
+ * is already stored, so this costs nothing but the PSA call.
+ */
+async function retryUndeliveredNotes(tenant: Tenant, psa: SuperOpsClient): Promise<void> {
+  const pending = await db
+    .select({
+      id: actionLogs.id,
+      ticketId: actionLogs.ticketId,
+      note: actionLogs.proposedPsaNote,
+      attempts: actionLogs.noteAttempts,
+    })
+    .from(actionLogs)
+    .where(
+      and(
+        eq(actionLogs.tenantId, tenant.id),
+        eq(actionLogs.status, 'note_failed'),
+        lte(actionLogs.noteAttempts, MAX_NOTE_ATTEMPTS - 1),
+      ),
+    )
+    .limit(25);
+
+  for (const row of pending) {
+    if (!running || !row.note) continue;
+    const attempt = (row.attempts ?? 1) + 1;
+    try {
+      await psa.addTicketNote(row.ticketId, row.note, true);
+      await db
+        .update(actionLogs)
+        .set({ status: 'classified', notePosted: true, noteError: null, noteAttempts: attempt })
+        .where(eq(actionLogs.id, row.id));
+      log.info(`Ticket ${row.ticketId}: note delivered on retry ${attempt}`);
+    } catch (err) {
+      const message = describeError(err);
+      const exhausted = attempt >= MAX_NOTE_ATTEMPTS;
+      await db
+        .update(actionLogs)
+        .set({
+          noteAttempts: attempt,
+          noteError: exhausted ? `Gave up after ${attempt} attempts: ${message}` : message,
+        })
+        .where(eq(actionLogs.id, row.id));
+      log.warn(
+        `Ticket ${row.ticketId}: note retry ${attempt}/${MAX_NOTE_ATTEMPTS} failed${exhausted ? ' — giving up' : ''} — ${message}`,
+      );
+    }
   }
 }
 
@@ -409,6 +483,7 @@ async function processTicket(
     completionTokens: result.completionTokens,
     notePosted,
     noteError,
+    noteAttempts: tenant.dryRun ? 0 : 1,
   });
 
   await markDone(tenant.id, ticket.ticketId, attempt);

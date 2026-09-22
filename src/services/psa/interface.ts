@@ -27,6 +27,12 @@ export interface ConnectionTestResult {
   capabilities?: PsaCapabilities;
 }
 
+/** A client (company) as the PSA knows it, for the allowlist picker. */
+export interface PsaCompany {
+  id: string;
+  name: string;
+}
+
 export interface PSAClient {
   readonly endpoint: string;
   /** Tickets created after `sinceUnixSeconds`, newest first where supported. */
@@ -34,6 +40,8 @@ export interface PSAClient {
   /** Fills in fields the list query does not project, notably the body. */
   enrichTicket(ticket: PsaTicket): Promise<PsaTicket>;
   addTicketNote(ticketId: string, note: string, isPrivate: boolean): Promise<void>;
+  /** The MSP's clients, or null when this schema exposes no way to list them. */
+  listCompanies(): Promise<PsaCompany[] | null>;
   testConnection(): Promise<ConnectionTestResult>;
   /** Browser URL for a ticket, for dashboard deep links. */
   ticketUrl(ticket: Pick<PsaTicket, 'ticketId' | 'displayId'>): string;

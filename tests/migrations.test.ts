@@ -18,6 +18,27 @@ describe('runMigrations', () => {
     expect(columns(db, 'tenants')).toContain('confidence_threshold');
     expect(columns(db, 'action_logs')).toContain('review_verdict');
     expect(columns(db, 'processed_tickets')).toContain('attempts');
+    expect(columns(db, 'action_logs')).toContain('note_attempts');
+  });
+
+  it('backfills the note attempt count so historical rows are not retried forever', () => {
+    const db = new Database(':memory:');
+    // Rewind to the pre-005 shape, then migrate forward again. The index has
+    // to go first — SQLite will not drop a column an index still references.
+    runMigrations(db);
+    db.exec(`DELETE FROM schema_migrations WHERE id = '005_note_delivery_retries'`);
+    db.exec(`DROP INDEX IF EXISTS action_logs_note_retry_idx`);
+    db.exec(`ALTER TABLE action_logs DROP COLUMN note_attempts`);
+    db.prepare(
+      `INSERT INTO action_logs (id, ticket_id, status, note_posted) VALUES ('a1', 'T-1', 'classified', 1)`,
+    ).run();
+
+    runMigrations(db);
+
+    const row = db.prepare(`SELECT note_attempts FROM action_logs WHERE id = 'a1'`).get() as {
+      note_attempts: number;
+    };
+    expect(row.note_attempts).toBe(1);
   });
 
   it('is idempotent — a second run applies nothing', () => {

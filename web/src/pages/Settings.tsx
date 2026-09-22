@@ -5,8 +5,10 @@ import {
   errorMessage,
   getCapabilities,
   getDefaultPrompt,
+  getLogStorage,
   getSystemStatus,
   getTenants,
+  pruneLogs,
   testAi,
   testSuperOps,
   testTenantConnection,
@@ -16,7 +18,7 @@ import {
   type Tenant,
 } from '../api';
 import { Alert, Badge, LoadingState, PageHeader, Spinner, Toggle, useToast } from '../components/ui';
-import { formatDateTime, formatDuration, formatRelative } from '../lib/format';
+import { formatBytes, formatDate, formatDateTime, formatDuration, formatRelative } from '../lib/format';
 
 type Tab = 'connection' | 'ai' | 'behaviour' | 'prompt' | 'diagnostics' | 'account';
 
@@ -549,7 +551,111 @@ function BehaviourSection({ tenant }: { tenant: Tenant }) {
 
         <SaveButton state={state} />
       </form>
+
+      <RetentionSection tenant={tenant} />
     </div>
+  );
+}
+
+/**
+ * Log retention. Every action log row keeps the full ticket body and the raw
+ * model response, which is what makes the log useful and also what makes it
+ * grow without bound.
+ */
+function RetentionSection({ tenant }: { tenant: Tenant }) {
+  const queryClient = useQueryClient();
+  const toast = useToast();
+  const [days, setDays] = useState(tenant.logRetentionDays ?? 0);
+  const { state, setState, markSaved } = useSaveState();
+
+  const { data: storage } = useQuery({
+    queryKey: ['log-storage', tenant.id],
+    queryFn: () => getLogStorage(tenant.id).then((r) => r.data),
+  });
+
+  const prune = useMutation({
+    mutationFn: () => pruneLogs(tenant.id),
+    onSuccess: (res) => {
+      void queryClient.invalidateQueries({ queryKey: ['log-storage'] });
+      void queryClient.invalidateQueries({ queryKey: ['actions'] });
+      toast.success(
+        `Cleared ${res.data.bodiesCleared} ticket bodies and deleted ${res.data.rowsDeleted} row(s)`,
+      );
+    },
+    onError: (err) => toast.error(errorMessage(err, 'Could not prune the logs')),
+  });
+
+  const OPTIONS = [
+    { value: 0, label: 'Keep everything' },
+    { value: 30, label: '30 days' },
+    { value: 90, label: '90 days' },
+    { value: 180, label: '6 months' },
+    { value: 365, label: '1 year' },
+    { value: 730, label: '2 years' },
+  ];
+
+  return (
+    <section className="border-t border-slate-200 pt-6 dark:border-slate-800">
+      <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Log retention</h2>
+      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+        Ticket bodies are cleared at a third of this window and the row is deleted at the end of it. The
+        classification and your review survive the first stage, so accuracy figures are unaffected by it.
+      </p>
+
+      {storage && (
+        <dl className="card mt-3 divide-y divide-slate-100 text-sm dark:divide-slate-800">
+          <Field label="Log rows">{storage.rows.toLocaleString()}</Field>
+          <Field label="Oldest entry">
+            {storage.oldestAt ? formatDate(storage.oldestAt) : 'none yet'}
+          </Field>
+          <Field label="Ticket text stored">{formatBytes(storage.bodyBytes)}</Field>
+          <Field label="Total text stored">{formatBytes(storage.totalBytes)}</Field>
+        </dl>
+      )}
+
+      <form
+        onSubmit={async (event) => {
+          event.preventDefault();
+          setState('saving');
+          try {
+            await updateTenant(tenant.id, { logRetentionDays: days });
+            markSaved();
+            void queryClient.invalidateQueries({ queryKey: ['tenants'] });
+            void queryClient.invalidateQueries({ queryKey: ['log-storage'] });
+            toast.success(days === 0 ? 'Logs will be kept indefinitely' : `Retention set to ${days} days`);
+          } catch (err) {
+            setState('idle');
+            toast.error(errorMessage(err, 'Could not save the retention window'));
+          }
+        }}
+        className="mt-4 space-y-3"
+      >
+        <div>
+          <label className="label">Keep action logs for</label>
+          <select value={days} onChange={(e) => setDays(Number(e.target.value))} className="input">
+            {OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="flex gap-2">
+          <SaveButton state={state} />
+          {(tenant.logRetentionDays ?? 0) > 0 && (
+            <button
+              type="button"
+              onClick={() => prune.mutate()}
+              disabled={prune.isPending}
+              className="btn-secondary"
+            >
+              {prune.isPending ? <Spinner /> : null} Prune now
+            </button>
+          )}
+        </div>
+      </form>
+    </section>
   );
 }
 

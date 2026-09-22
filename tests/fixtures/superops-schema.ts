@@ -50,6 +50,12 @@ export interface SchemaOptions {
   sort?: 'supported' | 'unrecognised' | 'absent';
   /** Whether a single-ticket detail query exists. */
   detailQuery?: boolean;
+  /**
+   * Shape of the client list query: 'wrapped' returns { clients { ... } },
+   * 'unusable' returns a payload whose id field cannot be resolved, and
+   * 'absent' omits the query entirely.
+   */
+  clientList?: 'wrapped' | 'unusable' | 'absent';
 }
 
 export function buildFakeSchema(options: SchemaOptions = {}): FakeSchema {
@@ -59,6 +65,7 @@ export function buildFakeSchema(options: SchemaOptions = {}): FakeSchema {
     noteStyle = 'createNote',
     sort = 'supported',
     detailQuery = true,
+    clientList = 'wrapped',
   } = options;
 
   const ticketFields: FakeField[] = [
@@ -162,8 +169,27 @@ export function buildFakeSchema(options: SchemaOptions = {}): FakeSchema {
       type: object('TicketList'),
       args: [{ name: 'input', type: nonNull(input('ListInfoInput')) }],
     },
-    { name: 'getClientList', type: object('ClientList'), args: [] },
   ];
+
+  if (clientList !== 'absent') {
+    queryFields.push({
+      name: 'getClientList',
+      type: object('ClientList'),
+      args: [{ name: 'input', type: nonNull(input('ListInfoInput')) }],
+    });
+    types.ClientList = {
+      name: 'ClientList',
+      kind: 'OBJECT',
+      fields: [{ name: 'clients', type: list(object(clientList === 'wrapped' ? 'Client' : 'OpaqueClient')) }],
+    };
+    if (clientList === 'unusable') {
+      types.OpaqueClient = {
+        name: 'OpaqueClient',
+        kind: 'OBJECT',
+        fields: [{ name: 'opaqueRef', type: scalar() }],
+      };
+    }
+  }
 
   if (detailQuery) {
     queryFields.push({
