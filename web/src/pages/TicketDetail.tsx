@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -24,7 +24,10 @@ import {
   Spinner,
   useToast,
 } from '../components/ui';
-import { ArrowLeftIcon, CheckIcon, CopyIcon, ExternalIcon, RefreshIcon, XIcon } from '../components/Icons';
+import { ArrowLeftIcon, CheckIcon, ExternalIcon, RefreshIcon, XIcon } from '../components/Icons';
+import { Callout, Card, CopyButton, Fact } from '../components/Panel';
+import { InvestigationCard, RunbooksCard } from '../components/InvestigationPanel';
+import { ExecutionCard } from '../components/ExecutionPanel';
 import { formatDateTime, formatRelative, formatUntil, parseEntities } from '../lib/format';
 import { actionLabel, categoryLabel, useCan, useMe, useVocabulary } from '../lib/session';
 
@@ -178,7 +181,12 @@ function Detail({ log, clientName }: { log: ActionDetail; clientName?: string })
             </Card>
           )}
 
+          <InvestigationCard log={log} />
+
           {isAction && <PlanCard log={log} />}
+          {isAction && log.executionPlan && <ExecutionCard log={log} />}
+
+          <RunbooksCard refs={log.kbRefs} />
 
           <Card title="Reasoning">
             <p className="text-sm text-slate-700 dark:text-slate-300">{log.reasoning}</p>
@@ -273,6 +281,10 @@ function ApprovalCard({ log }: { log: ActionDetail }) {
   const [comment, setComment] = useState('');
   const [rejecting, setRejecting] = useState(false);
   const [reason, setReason] = useState('');
+  const [method, setMethod] = useState('');
+  const [methodNote, setMethodNote] = useState('');
+  const attestation = Boolean(log.classification && vocabulary?.attestationActions?.includes(log.classification));
+  const attestationReady = !attestation || (Boolean(method) && (method !== 'other' || methodNote.trim().length > 0));
 
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: ['action', log.id] });
@@ -280,7 +292,12 @@ function ApprovalCard({ log }: { log: ActionDetail }) {
     void queryClient.invalidateQueries({ queryKey: ['queue-summary'] });
   };
   const approve = useMutation({
-    mutationFn: () => approveAction(log.id, comment || undefined),
+    mutationFn: () =>
+      approveAction(log.id, {
+        comment: comment || undefined,
+        verificationMethod: attestation ? method : undefined,
+        verificationNote: attestation ? methodNote.trim() || null : undefined,
+      }),
     onSuccess: (res) => {
       refresh();
       toast.success(res.data.state === 'approved' ? 'Approved' : `Approval recorded — ${res.data.required - res.data.approvals} more needed`);
@@ -335,6 +352,12 @@ function ApprovalCard({ log }: { log: ActionDetail }) {
                       {vocabulary?.rejectionReasons.find((r) => r.id === d.reason)?.label ?? d.reason}
                     </div>
                   )}
+                  {d.verificationMethod && (
+                    <div className="text-xs text-slate-500">
+                      Identity: {vocabulary?.verificationMethods.find((m) => m.id === d.verificationMethod)?.label ?? d.verificationMethod}
+                      {d.verificationNote ? ` — ${d.verificationNote}` : ''}
+                    </div>
+                  )}
                   {d.comment && <div className="text-xs text-slate-500">“{d.comment}”</div>}
                 </div>
               </li>
@@ -342,8 +365,40 @@ function ApprovalCard({ log }: { log: ActionDetail }) {
           </ul>
         )}
 
+        {pending && log.executionPlan?.identity && (
+          <p className={`mt-2 text-xs ${log.executionPlan.identity.blocker ? 'text-eye-700 dark:text-eye-300' : 'text-slate-500'}`}>
+            {log.executionPlan.identity.blocker ?? log.executionPlan.identity.note}
+          </p>
+        )}
+
         {pending && canApprove && !alreadyDecided && (
           <div className="mt-4 space-y-2">
+            {attestation && !rejecting && (
+              <div className="space-y-2 rounded-lg bg-amber-50 p-2 ring-1 ring-amber-200 dark:bg-amber-950/40 dark:ring-amber-900">
+                <label className="block text-xs font-medium text-amber-900 dark:text-amber-200" htmlFor={`verify-${log.id}`}>
+                  How did you confirm the requester is who they say?
+                </label>
+                <select id={`verify-${log.id}`} className="input" value={method} onChange={(e) => setMethod(e.target.value)}>
+                  <option value="">Choose how…</option>
+                  {vocabulary?.verificationMethods.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label}
+                    </option>
+                  ))}
+                </select>
+                {method && (
+                  <input
+                    className="input"
+                    placeholder={method === 'other' ? 'Describe how (required)' : 'Detail, e.g. the number you called (optional)'}
+                    value={methodNote}
+                    onChange={(e) => setMethodNote(e.target.value)}
+                  />
+                )}
+                <p className="text-[11px] text-amber-800 dark:text-amber-300">
+                  Password, MFA and sign-in changes are how attackers take over accounts. Replying to the ticket email is not verification.
+                </p>
+              </div>
+            )}
             <textarea
               className="input min-h-[60px]"
               placeholder="Comment (optional)"
@@ -371,7 +426,7 @@ function ApprovalCard({ log }: { log: ActionDetail }) {
               </div>
             ) : (
               <div className="flex gap-2">
-                <button className="btn-primary flex-1" disabled={approve.isPending} onClick={() => approve.mutate()}>
+                <button className="btn-primary flex-1" disabled={approve.isPending || !attestationReady} onClick={() => approve.mutate()}>
                   {approve.isPending ? <Spinner /> : <CheckIcon />} Approve
                 </button>
                 <button className="btn-secondary" onClick={() => setRejecting(true)}>
@@ -379,7 +434,7 @@ function ApprovalCard({ log }: { log: ActionDetail }) {
                 </button>
               </div>
             )}
-            <p className="text-xs text-slate-400">Approving signs off the plan. Swoop does not carry it out — a technician does.</p>
+            <p className="text-xs text-slate-400">Approving signs off the plan. Whether Swoop then runs it depends on the Execution settings — see “Carry it out”.</p>
           </div>
         )}
         {pending && alreadyDecided && (
@@ -436,7 +491,7 @@ function PlanCard({ log }: { log: ActionDetail }) {
               <li key={c.description} className="flex items-start gap-2">
                 <span
                   className={`mt-1 h-2 w-2 shrink-0 rounded-full ${
-                    c.status === 'pass' ? 'bg-emerald-500' : c.status === 'fail' ? 'bg-eye-500' : 'bg-slate-300 dark:bg-slate-600'
+                    c.status === 'pass' ? 'bg-emerald-500' : c.status === 'fail' ? 'bg-eye-500' : c.status === 'warn' ? 'bg-amber-500' : 'bg-slate-300 dark:bg-slate-600'
                   }`}
                 />
                 <span className="text-slate-700 dark:text-slate-300">
@@ -643,56 +698,5 @@ function TicketBody({ body }: { body: string | null }) {
         {long && !open ? `${body.slice(0, 600)}…` : body}
       </pre>
     </Card>
-  );
-}
-
-// ─── Primitives ────────────────────────────────────────────────────────────────
-
-function Card({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
-  return (
-    <section className="card p-4">
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">{title}</h2>
-        {action}
-      </div>
-      {children}
-    </section>
-  );
-}
-
-function Fact({ label, value, mono, tone }: { label: string; value: string; mono?: boolean; tone?: 'warning' | 'danger' }) {
-  const toneClass =
-    tone === 'danger' ? 'text-eye-700 dark:text-eye-300 font-medium' : tone === 'warning' ? 'text-amber-700 dark:text-amber-300' : 'text-slate-800 dark:text-slate-200';
-  return (
-    <div>
-      <dt className="text-xs text-slate-500 dark:text-slate-400">{label}</dt>
-      <dd className={`mt-0.5 break-words ${mono ? 'font-mono text-xs' : ''} ${toneClass}`}>{value}</dd>
-    </div>
-  );
-}
-
-function Callout({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <div className="mt-4 rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-800/60">
-      <div className="text-xs font-semibold text-slate-500">{title}</div>
-      <div className="text-sm text-slate-800 dark:text-slate-200">{children}</div>
-    </div>
-  );
-}
-
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button
-      className="btn-ghost text-xs"
-      onClick={() => {
-        void navigator.clipboard?.writeText(text).then(() => {
-          setCopied(true);
-          window.setTimeout(() => setCopied(false), 1500);
-        });
-      }}
-    >
-      {copied ? <CheckIcon /> : <CopyIcon />} {copied ? 'Copied' : 'Copy'}
-    </button>
   );
 }

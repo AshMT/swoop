@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   changePassword,
@@ -24,8 +25,9 @@ import { Alert, Badge, LoadingState, PageHeader, Spinner, Toggle, useToast } fro
 import { formatBytes, formatDate, formatDateTime, formatDuration, formatRelative } from '../lib/format';
 import { useCan } from '../lib/session';
 import { ApprovalSection, CippSection, TriageSection } from '../components/settings/PolicySections';
+import { AgentSection, ExecutionSection } from '../components/settings/AgentSections';
 
-type Tab = 'connection' | 'ai' | 'behaviour' | 'triage' | 'approvals' | 'cipp' | 'prompt' | 'diagnostics' | 'account';
+type Tab = 'connection' | 'ai' | 'behaviour' | 'triage' | 'approvals' | 'cipp' | 'agent' | 'execution' | 'prompt' | 'diagnostics' | 'account';
 
 const TABS: Array<{ id: Tab; label: string; adminOnly: boolean }> = [
   { id: 'connection', label: 'SuperOps', adminOnly: true },
@@ -34,6 +36,8 @@ const TABS: Array<{ id: Tab; label: string; adminOnly: boolean }> = [
   { id: 'triage', label: 'Triage rules', adminOnly: true },
   { id: 'approvals', label: 'Approvals', adminOnly: true },
   { id: 'cipp', label: 'CIPP', adminOnly: true },
+  { id: 'agent', label: 'Agent', adminOnly: true },
+  { id: 'execution', label: 'Execution', adminOnly: true },
   { id: 'prompt', label: 'Prompt', adminOnly: true },
   { id: 'diagnostics', label: 'Diagnostics', adminOnly: true },
   { id: 'account', label: 'Account', adminOnly: false },
@@ -41,7 +45,10 @@ const TABS: Array<{ id: Tab; label: string; adminOnly: boolean }> = [
 
 export default function Settings() {
   const isAdmin = useCan('admin');
-  const [chosen, setTab] = useState<Tab>('connection');
+  const [params, setParams] = useSearchParams();
+  const requested = params.get('tab');
+  const chosen: Tab = TABS.some((t) => t.id === requested) ? (requested as Tab) : 'connection';
+  const setTab = (next: Tab) => setParams(next === 'connection' ? {} : { tab: next }, { replace: true });
   // Everyone can manage their own account; only admins see the tenant settings.
   const tab: Tab = isAdmin ? chosen : 'account';
   const { data: tenants, isLoading } = useQuery({
@@ -97,6 +104,8 @@ export default function Settings() {
         {tab === 'triage' && <TriageSection tenant={tenant} />}
         {tab === 'approvals' && <ApprovalSection tenant={tenant} />}
         {tab === 'cipp' && <CippSection tenant={tenant} />}
+        {tab === 'agent' && <AgentSection tenant={tenant} />}
+        {tab === 'execution' && <ExecutionSection tenant={tenant} />}
         {tab === 'prompt' && <PromptSection tenant={tenant} />}
         {tab === 'diagnostics' && <DiagnosticsSection tenant={tenant} />}
         {tab === 'account' && <AccountSection />}

@@ -254,7 +254,7 @@ export function buildExecutionPlan(input: {
     reversible,
     rollback,
     executable: false,
-    note: 'Swoop does not carry out plans in this release. A technician runs these steps in CIPP after approval.',
+    note: 'Swoop runs these steps only when execution is switched on for this tenant, the client and action are allowed, and the proposal is approved. Otherwise a technician runs them in CIPP.',
   };
 }
 

@@ -89,6 +89,7 @@ export interface Tenant {
   cippApiUrl: string | null;
   cippTenantId: string | null;
   cippClientId: string | null;
+  kbLastSyncedAt?: number | null;
   createdAt: number | null;
 }
 
@@ -104,6 +105,7 @@ export interface Client {
   m365TenantId: string | null;
   m365DefaultDomain: string | null;
   vipEmails: string[];
+  authorisedContacts: string[];
   createdAt: number | null;
   actionCount?: number;
   lastActionAt?: number | null;
@@ -166,6 +168,7 @@ export interface ActionLog {
   approvalsRequired?: number | null;
   approvalExpiresAt?: number | null;
   supersededBy?: string | null;
+  executionState?: string | null;
 }
 
 export type Priority = 'P1' | 'P2' | 'P3' | 'P4';
@@ -230,8 +233,9 @@ export interface ExecutionPlan {
   tenant: string | null;
   target: string | null;
   steps: PlanStep[];
-  prechecks: Array<{ description: string; status: 'pass' | 'fail' | 'unknown'; detail?: string }>;
+  prechecks: Array<{ description: string; status: 'pass' | 'fail' | 'warn' | 'unknown'; detail?: string }>;
   blockers: string[];
+  identity?: { configured: boolean; requesterIsTarget: boolean; requesterAuthorised: boolean; blocker: string | null; note: string } | null;
   reversible: boolean;
   rollback: string | null;
   executable: false;
@@ -265,6 +269,8 @@ export interface Decision {
   decision: 'approved' | 'rejected';
   reason: string | null;
   comment: string | null;
+  verificationMethod?: string | null;
+  verificationNote?: string | null;
   createdAt: number | null;
 }
 
@@ -303,6 +309,9 @@ export interface ActionDetail extends ActionLog {
   executionPlan: ExecutionPlan | null;
   enrichment: UserEnrichment | null;
   approvalReason: string | null;
+  investigation: Investigation | null;
+  kbRefs: KbRef[] | null;
+  agentEnabled?: boolean;
   decisions: Decision[];
   cluster: IncidentCluster | null;
   history: Array<{
@@ -315,6 +324,114 @@ export interface ActionDetail extends ActionLog {
   }>;
 }
 
+export interface ToolRun {
+  tool: string;
+  args: Record<string, unknown>;
+  ok: boolean;
+  summary: string;
+  result: string;
+  ms: number;
+}
+
+export interface Investigation {
+  status: 'completed' | 'failed' | 'unavailable';
+  model: string | null;
+  startedAt: number;
+  durationMs: number;
+  steps: ToolRun[];
+  findings: string[];
+  diagnosis: string | null;
+  recommendation: { action: string | null; targetUserEmail: string | null; groupName: string | null; licenceName: string | null } | null;
+  ungrounded: string[];
+  technicianSteps: string[];
+  replyToRequester: string | null;
+  missingInformation: string | null;
+  confidence: number | null;
+  error: string | null;
+}
+
+export interface KbRef {
+  id: string;
+  title: string;
+  snippet: string;
+  score: number;
+  clientSpecific: boolean;
+  source: string;
+}
+
+export interface Runbook {
+  id: string;
+  tenantId: string;
+  clientId: string | null;
+  title: string;
+  body: string;
+  tags: string[];
+  source: 'swoop' | 'superops';
+  updatedBy: string | null;
+  updatedAt: number | null;
+}
+
+export interface ExecutionStep {
+  order: number;
+  description: string;
+  method: 'GET' | 'POST';
+  endpoint: string;
+  payload: unknown;
+  status: 'ok' | 'failed' | 'skipped' | 'planned' | 'uncertain';
+  result: string | null;
+  durationMs: number | null;
+}
+
+export interface ExecutionRun {
+  id: string;
+  action: string;
+  mode: 'dry_run' | 'live';
+  status: 'running' | 'dry_run_ok' | 'succeeded' | 'noop' | 'failed' | 'blocked' | 'uncertain';
+  startedBy: string | null;
+  startedAt: number | null;
+  finishedAt: number | null;
+  target: string | null;
+  m365Tenant: string | null;
+  steps: ExecutionStep[];
+  verification: 'verified' | 'reported' | 'pending' | 'failed' | 'skipped' | null;
+  verificationDetail: string | null;
+  summary: string | null;
+  hasSecret: boolean;
+  secretExpiresAt: number | null;
+  secretRevealedBy: string | null;
+  secretRevealedAt: number | null;
+  rollback: string | null;
+  notePosted: boolean | null;
+  replyPosted: boolean | null;
+}
+
+export interface ExecutionReadiness {
+  mode: 'off' | 'dry_run' | 'live';
+  canDryRun: boolean;
+  canRunLive: boolean;
+  reasons: string[];
+  attestationRequired: boolean;
+  attested: boolean;
+  lastDryRunOk: boolean;
+}
+
+export interface AgentSettings {
+  enabled: boolean;
+  autoRun: 'actions' | 'all' | 'manual';
+  model: string | null;
+  maxSteps: number;
+}
+
+export interface ExecutionPolicy {
+  mode: 'off' | 'dry_run' | 'live';
+  actions: string[];
+  clientIds: string[];
+  requireDryRun: boolean;
+  runOnApproval: boolean;
+  postResultNote: boolean;
+  replyToRequester: boolean;
+}
+
 export interface Vocabulary {
   actions: Array<{ id: string; label: string; description: string; sensitive: boolean }>;
   categories: Array<{ id: string; label: string; description: string; defaultQueue: string }>;
@@ -322,6 +439,9 @@ export interface Vocabulary {
   impacts: string[];
   urgencies: string[];
   rejectionReasons: Array<{ id: string; label: string }>;
+  verificationMethods: Array<{ id: string; label: string }>;
+  executableActions: string[];
+  attestationActions: string[];
 }
 
 export interface QueueSummary {
@@ -648,9 +768,18 @@ export const getPsaClients = (id: string) =>
 
 // ─── Clients ──────────────────────────────────────────────────────────────────
 export const getPolicies = (id: string) =>
-  api.get<{ triageSettings: TriageSettings; approvalPolicy: ApprovalPolicy; categories: Vocabulary['categories'] }>(
-    `/tenants/${id}/policies`,
-  );
+  api.get<{
+    triageSettings: TriageSettings;
+    approvalPolicy: ApprovalPolicy;
+    agentSettings: AgentSettings;
+    executionPolicy: ExecutionPolicy;
+    executionDisabledByInstall: boolean;
+    executableActions: string[];
+    categories: Vocabulary['categories'];
+  }>(`/tenants/${id}/policies`);
+
+export const syncKnowledgeBase = (id: string) =>
+  api.post<{ ok: boolean; available: boolean; imported: number; removed: number; error?: string }>(`/tenants/${id}/kb-sync`);
 
 export const testCipp = (id: string) =>
   api.post<{ ok: boolean; tenantCount?: number; tenants?: Array<{ domain: string | null; name: string | null }>; error?: string }>(
@@ -671,6 +800,7 @@ export const createClient = (data: {
   m365TenantId?: string | null;
   m365DefaultDomain?: string | null;
   vipEmails?: string[];
+  authorisedContacts?: string[];
 }) => api.post<Client>('/clients', data);
 
 export const updateClient = (id: string, data: Partial<Client>) => api.patch<Client>(`/clients/${id}`, data);
@@ -719,8 +849,41 @@ export const getQueueSummary = (params: { tenantId?: string; days?: number } = {
 
 export const getVocabulary = () => api.get<Vocabulary>('/actions/vocabulary');
 
-export const approveAction = (id: string, comment?: string) =>
-  api.post<{ ok: boolean; state: string; approvals: number; required: number }>(`/actions/${id}/approve`, { comment });
+export const approveAction = (
+  id: string,
+  body: { comment?: string; verificationMethod?: string | null; verificationNote?: string | null } = {},
+) => api.post<{ ok: boolean; state: string; approvals: number; required: number }>(`/actions/${id}/approve`, body);
+
+export const investigateAction = (id: string) => api.post<Investigation>(`/actions/${id}/investigate`);
+
+export const getExecutions = (id: string) =>
+  api.get<{ runs: ExecutionRun[]; readiness: ExecutionReadiness }>(`/actions/${id}/executions`);
+
+export const executeAction = (id: string, mode: 'dry_run' | 'live') =>
+  api.post<{ ok: boolean; executionId: string }>(`/actions/${id}/execute`, { mode });
+
+export const revealExecutionSecret = (executionId: string) =>
+  api.post<{ secret: string }>(`/actions/executions/${executionId}/reveal`);
+
+export const resolveExecution = (executionId: string, outcome: 'succeeded' | 'failed', note?: string) =>
+  api.post<{ ok: boolean }>(`/actions/executions/${executionId}/resolve`, { outcome, note });
+
+// ─── Knowledge ────────────────────────────────────────────────────────────────
+export const getRunbooks = (tenantId: string, clientId?: string) =>
+  api.get<Runbook[]>('/knowledge', { params: clean({ tenantId, clientId }) });
+
+export const searchRunbooks = (tenantId: string, q: string, scope: { clientId?: string; general?: boolean } = {}) =>
+  api.get<KbRef[]>('/knowledge/search', {
+    params: clean({ tenantId, q, clientId: scope.clientId, scope: scope.general ? 'general' : scope.clientId ? 'client' : 'all' }),
+  });
+
+export const createRunbook = (data: { tenantId: string; clientId: string | null; title: string; body: string; tags?: string[] }) =>
+  api.post<{ id: string }>('/knowledge', data);
+
+export const updateRunbook = (id: string, data: { clientId?: string | null; title?: string; body?: string; tags?: string[] }) =>
+  api.patch<{ ok: boolean }>(`/knowledge/${id}`, data);
+
+export const deleteRunbook = (id: string) => api.delete<{ ok: boolean }>(`/knowledge/${id}`);
 
 export const rejectAction = (id: string, reason: string, comment?: string) =>
   api.post<{ ok: boolean; state: string }>(`/actions/${id}/reject`, { reason, comment });

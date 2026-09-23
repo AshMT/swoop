@@ -256,6 +256,30 @@ function describeAudit(entry: AuditEntry): string {
       return `Changed settings: ${Array.isArray(d.fields) ? (d.fields as string[]).join(', ') : ''}`;
     case 'client.update':
       return `Changed client: ${Array.isArray(d.fields) ? (d.fields as string[]).join(', ') : ''}`;
+    case 'ticket.investigate':
+      return `Investigated ticket ${s('ticketId')} (${s('steps')} lookups, ${s('status')})`;
+    case 'execution.dry_run':
+      return `Dry-ran ${s('action').replace(/_/g, ' ')}${s('target') ? ` for ${s('target')}` : ''}${s('m365Tenant') ? ` in ${s('m365Tenant')}` : ''}`;
+    case 'execution.start':
+      return `Ran ${s('action').replace(/_/g, ' ')}${s('target') ? ` for ${s('target')}` : ''}${s('m365Tenant') ? ` in ${s('m365Tenant')}` : ''}`;
+    case 'execution.succeeded':
+      return `Change made and confirmed: ${s('action').replace(/_/g, ' ')} for ${s('target')}`;
+    case 'execution.failed':
+    case 'execution.uncertain':
+    case 'execution.blocked':
+      return `${entry.action === 'execution.failed' ? 'Change failed' : entry.action === 'execution.uncertain' ? 'Change outcome unknown' : 'Change stopped'} on ticket ${s('ticketId')}: ${s('summary')}`;
+    case 'execution.resolve':
+      return `Recorded an unknown outcome as ${s('outcome')}${s('note') ? ` — ${s('note')}` : ''}`;
+    case 'execution.secret_reveal':
+      return `Revealed the temporary password for ${s('target')}`;
+    case 'execution.mode_change':
+      return `Changed execution from ${s('from').replace('_', ' ')} to ${s('to').replace('_', ' ')}`;
+    case 'execution.policy_change':
+      return `Changed what Swoop may run: ${Array.isArray(d.actions) ? (d.actions as string[]).join(', ') || 'no actions' : ''} for ${s('clients')} client(s)`;
+    case 'runbook.create':
+    case 'runbook.update':
+    case 'runbook.delete':
+      return `${entry.action === 'runbook.create' ? 'Added' : entry.action === 'runbook.update' ? 'Edited' : 'Deleted'} runbook${s('title') ? ` “${s('title')}”` : ''}`;
     default:
       return entry.action.replace(/[._]/g, ' ');
   }

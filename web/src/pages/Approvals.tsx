@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { approveAction, errorMessage, getActions, getClients, getTenants, type ActionLog, type ApprovalState } from '../api';
-import { ApprovalBadge, EmptyState, LoadingState, PageHeader, PriorityBadge, SignalChips, Spinner, useToast } from '../components/ui';
+import { ApprovalBadge, Badge, EmptyState, LoadingState, PageHeader, PriorityBadge, SignalChips, Spinner, useToast } from '../components/ui';
 import { CheckIcon } from '../components/Icons';
 import { formatRelative, formatUntil, parseEntities } from '../lib/format';
 import { actionLabel, useCan, useVocabulary } from '../lib/session';
@@ -16,8 +16,8 @@ const TABS: Array<{ id: ApprovalState; label: string }> = [
 ];
 
 /**
- * Proposals waiting on a person. Approving records the decision and the plan
- * for a technician; Swoop does not change anything in a client tenant.
+ * Proposals waiting on a person. Approving records the decision and the plan;
+ * Execution settings decide whether Swoop then carries it out.
  */
 export default function Approvals() {
   const [tab, setTab] = useState<ApprovalState>('pending');
@@ -58,7 +58,7 @@ export default function Approvals() {
     <div>
       <PageHeader
         title="Approvals"
-        description="Proposed changes waiting for sign-off. Approval records the decision and the plan; a technician carries it out."
+        description="Proposed changes waiting for sign-off. Identity-sensitive changes open the ticket so you can record how the requester was verified."
       />
       <div className="mb-4 flex gap-1 border-b border-slate-200 dark:border-slate-800">
         {TABS.map((t) => (
@@ -92,7 +92,12 @@ export default function Approvals() {
                 item={item}
                 clientName={item.clientId ? clientNames.get(item.clientId) : undefined}
                 actionText={actionLabel(vocabulary, item.classification)}
-                canQuickApprove={canApprove && tab === 'pending' && (item.approvalsRequired ?? 1) === 1}
+                canQuickApprove={
+                  canApprove &&
+                  tab === 'pending' &&
+                  (item.approvalsRequired ?? 1) === 1 &&
+                  !vocabulary?.attestationActions?.includes(item.classification ?? '')
+                }
                 approving={quickApprove.isPending && quickApprove.variables === item.id}
                 onApprove={() => quickApprove.mutate(item.id)}
               />
@@ -141,6 +146,7 @@ function ApprovalRow({
           <SignalChips signals={item.signals} minSeverity="warn" />
         </div>
       </div>
+      {item.executionState && <ExecutionStateBadge state={item.executionState} />}
       <ApprovalBadge state={item.approvalState} required={item.approvalsRequired} />
       {canQuickApprove && !risky ? (
         <button className="btn-primary" onClick={onApprove} disabled={approving}>
@@ -153,4 +159,19 @@ function ApprovalRow({
       )}
     </li>
   );
+}
+
+const EXECUTION_STATES: Record<string, { label: string; tone: 'neutral' | 'success' | 'warning' | 'danger' | 'info' }> = {
+  running: { label: 'Running', tone: 'info' },
+  succeeded: { label: 'Done by Swoop', tone: 'success' },
+  noop: { label: 'Already done', tone: 'neutral' },
+  failed: { label: 'Run failed', tone: 'danger' },
+  uncertain: { label: 'Check outcome', tone: 'warning' },
+  blocked: { label: 'Run stopped', tone: 'warning' },
+};
+
+function ExecutionStateBadge({ state }: { state: string }) {
+  const style = EXECUTION_STATES[state];
+  if (!style) return null;
+  return <Badge tone={style.tone}>{style.label}</Badge>;
 }

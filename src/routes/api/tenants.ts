@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../../db';
-import { tenants } from '../../db/schema';
+import { clients, tenants } from '../../db/schema';
 import { config } from '../../config';
 import { requireAuth, requireRole, type AuthRequest } from '../../middleware/auth';
 import { rateLimit } from '../../middleware/security';
@@ -128,8 +128,16 @@ router.patch('/:id', requireRole('admin'), async (req: AuthRequest, res) => {
       res.status(400).json({ error: `These actions cannot be executed: ${unknown.join(', ')}` });
       return;
     }
-    // Going live is the one setting that changes what Swoop can do to a
-    // client's tenant, so it is recorded on its own line in the audit log.
+    const owned = new Set(
+      (await db.select({ id: clients.id }).from(clients).where(eq(clients.tenantId, existing.id))).map((c) => c.id),
+    );
+    const foreign = executionPolicy.clientIds.filter((id) => !owned.has(id));
+    if (foreign.length) {
+      res.status(400).json({ error: 'The execution policy names clients that are not in this tenant.' });
+      return;
+    }
+    // Every change to what Swoop may do to a client's tenant is recorded;
+    // going live gets its own line so it stands out.
     const before = readExecutionPolicy(existing.executionPolicy);
     if (before.mode !== executionPolicy.mode) {
       await recordAudit({
@@ -139,6 +147,30 @@ router.patch('/:id', requireRole('admin'), async (req: AuthRequest, res) => {
         targetId: existing.id,
         tenantId: existing.id,
         detail: { from: before.mode, to: executionPolicy.mode },
+        req,
+      });
+    }
+    const sorted = (list: string[]) => [...list].sort().join(',');
+    if (
+      sorted(before.actions) !== sorted(executionPolicy.actions) ||
+      sorted(before.clientIds) !== sorted(executionPolicy.clientIds) ||
+      before.requireDryRun !== executionPolicy.requireDryRun ||
+      before.runOnApproval !== executionPolicy.runOnApproval ||
+      before.replyToRequester !== executionPolicy.replyToRequester
+    ) {
+      await recordAudit({
+        user: req.user,
+        action: 'execution.policy_change',
+        targetType: 'tenant',
+        targetId: existing.id,
+        tenantId: existing.id,
+        detail: {
+          actions: executionPolicy.actions,
+          clients: executionPolicy.clientIds.length,
+          requireDryRun: executionPolicy.requireDryRun,
+          runOnApproval: executionPolicy.runOnApproval,
+          replyToRequester: executionPolicy.replyToRequester,
+        },
         req,
       });
     }

@@ -212,6 +212,11 @@ export default function Clients() {
                     {client.vipEmails.length > 0 && (
                       <div className="mt-0.5 text-slate-400">{client.vipEmails.length} VIP{client.vipEmails.length === 1 ? '' : 's'}</div>
                     )}
+                    {client.authorisedContacts?.length > 0 && (
+                      <div className="mt-0.5 text-slate-400">
+                        {client.authorisedContacts.length} authorised contact{client.authorisedContacts.length === 1 ? '' : 's'}
+                      </div>
+                    )}
                   </td>
                   <td className="td">
                     <Toggle
@@ -286,6 +291,7 @@ function ClientForm({
   const [m365Domain, setM365Domain] = useState(client?.m365DefaultDomain ?? '');
   const [m365TenantId, setM365TenantId] = useState(client?.m365TenantId ?? '');
   const [vips, setVips] = useState((client?.vipEmails ?? []).join('\n'));
+  const [contacts, setContacts] = useState((client?.authorisedContacts ?? []).join('\n'));
   const [error, setError] = useState('');
 
   // Domains already seen on this client's tickets — one click to add them.
@@ -326,6 +332,7 @@ function ClientForm({
             m365DefaultDomain: m365Domain.trim() || null,
             m365TenantId: m365TenantId.trim() || null,
             vipEmails: splitList(vips),
+            authorisedContacts: splitList(contacts),
           })
         : createClient({
             tenantId,
@@ -338,6 +345,7 @@ function ClientForm({
             m365DefaultDomain: m365Domain.trim() || null,
             m365TenantId: m365TenantId.trim() || null,
             vipEmails: splitList(vips),
+            authorisedContacts: splitList(contacts),
           }),
     onSuccess: onSaved,
     onError: (err) => setError(errorMessage(err, 'Could not save the client')),
@@ -487,6 +495,20 @@ function ClientForm({
                 className="input font-mono text-xs"
               />
               <p className="hint">Tickets from these addresses are raised one priority level.</p>
+            </div>
+            <div>
+              <label className="label">Authorised contacts</label>
+              <textarea
+                value={contacts}
+                onChange={(e) => setContacts(e.target.value)}
+                rows={2}
+                placeholder="office.manager@acme.com&#10;it.lead@acme.com"
+                className="input font-mono text-xs"
+              />
+              <p className="hint">
+                Who may ask for changes to other people’s accounts. When set, a request from anyone else to reset someone’s
+                password, MFA or access is blocked until a technician confirms it. People can always ask for their own.
+              </p>
             </div>
           </div>
         </fieldset>

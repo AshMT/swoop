@@ -33,6 +33,8 @@ export async function searchKnowledge(input: {
   query: string;
   limit?: number;
   minScore?: number;
+  /** Every client's runbooks — for the Knowledge page only, never for a ticket. */
+  allClients?: boolean;
 }): Promise<KbRef[]> {
   const rows = await db
     .select()
@@ -40,7 +42,11 @@ export async function searchKnowledge(input: {
     .where(
       and(
         eq(runbooks.tenantId, input.tenantId),
-        input.clientId ? or(isNull(runbooks.clientId), eq(runbooks.clientId, input.clientId)) : isNull(runbooks.clientId),
+        input.allClients
+          ? undefined
+          : input.clientId
+            ? or(isNull(runbooks.clientId), eq(runbooks.clientId, input.clientId))
+            : isNull(runbooks.clientId),
       ),
     );
   if (rows.length === 0 || !input.query.trim()) return [];
@@ -56,7 +62,7 @@ export async function searchKnowledge(input: {
         id: entry.doc.id,
         title: entry.doc.row.title,
         snippet: snippetFor(entry.doc.row.body, entry.sharedTerms),
-        score: Math.round((entry.score + (clientSpecific ? 0.1 : 0)) * 100) / 100,
+        score: Math.round((entry.score + (clientSpecific && !input.allClients ? 0.1 : 0)) * 100) / 100,
         clientSpecific,
         source: entry.doc.row.source ?? 'swoop',
       };

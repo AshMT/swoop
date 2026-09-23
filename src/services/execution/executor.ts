@@ -257,7 +257,9 @@ export async function startExecution(
     if (/UNIQUE/i.test(describeError(err))) throw new ExecutionRefused('This change is already running or has already been made.');
     throw err;
   }
-  await db.update(actionLogs).set({ executionState: 'running' }).where(eq(actionLogs.id, logId));
+  // The proposal's execution state follows live runs only: a dry run after
+  // the change was made must not hide that it was made.
+  if (mode === 'live') await db.update(actionLogs).set({ executionState: 'running' }).where(eq(actionLogs.id, logId));
   await recordAudit({
     user,
     action: mode === 'live' ? 'execution.start' : 'execution.dry_run',
@@ -832,8 +834,53 @@ async function finish(
       finishedAt: Math.floor(Date.now() / 1000),
     })
     .where(eq(executions.id, executionId));
-  await db.update(actionLogs).set({ executionState: outcome.status }).where(eq(actionLogs.id, logId));
+  const [finished] = await db.select({ mode: executions.mode }).from(executions).where(eq(executions.id, executionId)).limit(1);
+  if (finished?.mode === 'live') await db.update(actionLogs).set({ executionState: outcome.status }).where(eq(actionLogs.id, logId));
   log.info(`Execution ${executionId}: ${outcome.status} — ${redact(outcome.summary, secretValue)}`);
+  if (finished?.mode === 'live' && ['failed', 'uncertain', 'blocked'].includes(outcome.status)) {
+    await afterProblem(logId, executionId, outcome.status, redact(outcome.summary, secretValue) ?? '').catch((err) =>
+      log.warn(`Execution ${executionId}: could not record the problem on the ticket — ${describeError(err)}`),
+    );
+  }
+}
+
+/**
+ * A live run that failed, stopped, or ended with an unknown outcome is
+ * audited and noted on the ticket, so the technician who picks it up knows
+ * Swoop already tried — and whether the tenant may have changed.
+ */
+async function afterProblem(logId: string, executionId: string, status: string, summary: string): Promise<void> {
+  const [row] = await db.select().from(actionLogs).where(eq(actionLogs.id, logId)).limit(1);
+  if (!row?.tenantId) return;
+  const [tenant] = await db.select().from(tenants).where(eq(tenants.id, row.tenantId)).limit(1);
+  if (!tenant) return;
+  await recordAudit({
+    user: null,
+    action: `execution.${status}`,
+    targetType: 'action_log',
+    targetId: logId,
+    tenantId: tenant.id,
+    detail: { executionId, action: row.classification, ticketId: row.ticketId, summary: summary.slice(0, 300) },
+  });
+  if (tenant.dryRun || !readExecutionPolicy(tenant.executionPolicy).postResultNote) return;
+  const heading =
+    status === 'uncertain'
+      ? 'Swoop — change sent, outcome unknown'
+      : status === 'blocked'
+        ? 'Swoop — change stopped before sending'
+        : 'Swoop — change failed';
+  const advice =
+    status === 'uncertain'
+      ? 'The request reached CIPP but Swoop could not confirm the result. Check the user in CIPP or the admin centre and record what you find on the ticket in Swoop before anyone retries.'
+      : status === 'blocked'
+        ? 'Nothing was sent to the tenant.'
+        : 'CIPP reported an error. Nothing is known to have changed; a technician should take it from here.';
+  await createPsaClient(tenant).addTicketNote(
+    row.ticketId,
+    [heading, '', summary, '', advice, '', '---', `Execution ${executionId}.`].join('\n'),
+    true,
+  );
+  await db.update(executions).set({ notePosted: true }).where(eq(executions.id, executionId));
 }
 
 async function afterSuccess(
@@ -983,7 +1030,7 @@ export async function sweepExecutions(): Promise<void> {
       .update(executions)
       .set({ status, summary: 'Interrupted — Swoop stopped before this run finished. Check the tenant before retrying.', finishedAt: now })
       .where(eq(executions.id, run.id));
-    await db.update(actionLogs).set({ executionState: status }).where(eq(actionLogs.id, run.actionLogId));
+    if (run.mode === 'live') await db.update(actionLogs).set({ executionState: status }).where(eq(actionLogs.id, run.actionLogId));
   }
   await db.update(executions).set({ secret: null }).where(lt(executions.secretExpiresAt, now));
 }

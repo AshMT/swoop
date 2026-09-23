@@ -12,6 +12,7 @@ import { readAgentSettings } from './settings';
 import { runTool, TOOL_DEFINITIONS, type ToolContext, type ToolRun } from './tools';
 
 const log = createLogger('Agent');
+const TOOL_NAMES = new Set(TOOL_DEFINITIONS.map((t) => t.function.name));
 
 /**
  * The investigation: the model works the ticket the way a technician would —
@@ -226,10 +227,25 @@ export function finalise(inv: Investigation, content: string, input: Investigati
     recommendation = { action, targetUserEmail: target, groupName: group, licenceName: licence };
   }
 
+  // A finding attributed to a lookup that never ran (or failed) is the
+  // model's memory, not a fact about this tenant.
+  const ranOk = new Set(steps.filter((s) => s.ok).map((s) => s.tool));
+  const findings: string[] = [];
+  for (const raw of data.findings) {
+    const finding = raw.trim();
+    if (!finding) continue;
+    const cited = /^([a-z_]+)\s*:/.exec(finding)?.[1];
+    if (cited && TOOL_NAMES.has(cited) && !ranOk.has(cited)) {
+      ungrounded.push(`finding "${finding.slice(0, 80)}"`);
+      continue;
+    }
+    findings.push(finding);
+  }
+
   const clean = (s: string | null | undefined) => (s?.trim() ? s.trim().slice(0, 2000) : null);
   return {
     ...inv,
-    findings: data.findings.map((f) => f.trim()).filter(Boolean).slice(0, 12),
+    findings: findings.slice(0, 12),
     diagnosis: clean(data.diagnosis),
     recommendation,
     ungrounded,

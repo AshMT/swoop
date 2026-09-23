@@ -38,12 +38,24 @@ router.get('/', async (req, res) => {
 });
 
 router.get('/search', async (req, res) => {
-  const parsed = z.object({ tenantId: z.string(), clientId: z.string().optional(), q: z.string().min(1).max(500) }).safeParse(req.query);
+  const parsed = z
+    .object({ tenantId: z.string(), clientId: z.string().optional(), q: z.string().min(1).max(500), scope: z.enum(['all', 'general', 'client']).optional() })
+    .safeParse(req.query);
   if (!parsed.success) {
     res.status(400).json({ error: 'tenantId and q are required' });
     return;
   }
-  res.json(await searchKnowledge({ tenantId: parsed.data.tenantId, clientId: parsed.data.clientId ?? null, query: parsed.data.q, limit: 10, minScore: 0.05 }));
+  const { tenantId, clientId, q, scope } = parsed.data;
+  res.json(
+    await searchKnowledge({
+      tenantId,
+      clientId: scope === 'general' ? null : clientId ?? null,
+      allClients: scope === 'all' && !clientId,
+      query: q,
+      limit: 20,
+      minScore: 0.05,
+    }),
+  );
 });
 
 const bodySchema = z.object({

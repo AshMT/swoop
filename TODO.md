@@ -37,6 +37,10 @@ Then, in order:
 - [ ] Under **Settings → Triage rules**, set the timezone and business hours. Check the default queue names match what your desk calls them.
 - [ ] Invite at least one other person as an **approver** from **People**, so dual approval has someone to ask.
 - [ ] Optional: connect CIPP under **Settings → CIPP** and press **Test connection**. Then open a proposed password reset and check the *User in Microsoft 365* panel matches reality. Only GET calls are made.
+- [ ] Add each client's **authorised contacts** — the people allowed to ask for changes to other people's accounts.
+- [ ] Write the first **runbooks** on the Knowledge page: who approves what at each client, and the exact group and licence names.
+- [ ] Optional: turn on the **agent** (Settings → Agent) with a tool-calling model, and read a few investigations before trusting them.
+- [ ] Later, and only once calibration holds: **Execution** in dry-run mode first, then one action for one client.
 
 ## 2. Calibrate
 
@@ -74,7 +78,14 @@ The image builds and pushes but is private, so `docker pull ghcr.io/ashmt/swoop:
 - [x] **Read-only CIPP lookups** feeding plan prechecks.
 - [ ] **Confirm SuperOps accepts the longer note.** The triage note is several times the size of the old one. If SuperOps truncates notes, trim what the note includes in `src/services/note-format.ts`.
 - [ ] **Write priority back to SuperOps.** Needs the real `updateTicket` mutation shape and the tenant's priority names; the probe does not look for it yet.
-- [ ] **Execution.** A write-capable CIPP client behind its own switch, per-action opt-in, prechecks re-run immediately before, result posted to the ticket.
+- [x] **Execution.** Off by default; per-action and per-client allowlists; dry run first; resolve against the live tenant and refuse anything ambiguous; send once, never retry a write; read the tenant back; one live run per proposal; unknown outcomes block retries until a person records them; one-time encrypted password reveal; install-wide kill switch.
+- [x] **Investigation agent.** Read-only tools confined to the ticket's client; recommendations and findings checked against what the lookups returned.
+- [x] **Knowledge.** Runbooks per client or general, cited on tickets; SuperOps KB sync when the schema exposes one.
+- [x] **Identity checks.** Authorised contacts per client; approvers record how they verified the requester for identity-sensitive changes.
+- [ ] **Execution against a real CIPP.** Run dry runs for each action against a test tenant, then one live group add, and compare what CIPP returns with the fake in `tests/helpers/fake-cipp.ts` — CIPP's response wording changes between releases.
+- [ ] **Confirm the SuperOps KB query.** The probe looks for a knowledge base list query; check Settings → Diagnostics on a real instance and adjust the candidates in `src/services/psa/capabilities.ts` if it finds none.
+- [ ] **Mailbox permissions.** Plan-only until Swoop can read Exchange permissions back after a change.
+- [ ] **Agent model choice.** Try the investigation with the models you actually run; small local models may need `autoRun: manual`.
 - [ ] **Confirm which note format SuperOps renders.** The mechanism is built; the remaining step is a real ticket. Paste each preview from Settings → Behaviour into a test ticket and set the one that renders.
 - [x] **Prompt version on each row.** Each classification is stamped with a fingerprint of the prompt-and-model combination, and the Calibration page scopes to one version and warns when the window spans several.
 - [x] **Accuracy trend.** Daily agreement rate charted against the 90% target and 85% floor.

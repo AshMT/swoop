@@ -15,7 +15,7 @@ import { useVocabulary } from '../../lib/session';
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
-function SaveBar({ saving, dirty }: { saving: boolean; dirty: boolean }) {
+export function SaveBar({ saving, dirty }: { saving: boolean; dirty: boolean }) {
   return (
     <div className="flex items-center gap-3">
       <button type="submit" className="btn-primary" disabled={saving || !dirty}>
@@ -26,7 +26,7 @@ function SaveBar({ saving, dirty }: { saving: boolean; dirty: boolean }) {
   );
 }
 
-function usePolicies(tenantId: string) {
+export function usePolicies(tenantId: string) {
   return useQuery({
     queryKey: ['policies', tenantId],
     queryFn: () => getPolicies(tenantId).then((r) => r.data),
@@ -179,7 +179,7 @@ function TriageForm({
   );
 }
 
-function NumberField({
+export function NumberField({
   label,
   value,
   min,
@@ -247,9 +247,10 @@ function ApprovalForm({ tenant, initial }: { tenant: Tenant; initial: ApprovalPo
 
   return (
     <form onSubmit={submit} className="space-y-6">
-      <Alert tone="info" title="Approval signs off a plan — it does not run it">
-        Every proposed change waits for a person. Approving records who agreed and posts the plan to the ticket for a
-        technician to carry out. Swoop has no code path that changes a client tenant.
+      <Alert tone="info" title="Approval signs off a plan">
+        Every proposed change waits for a person. Approving records who agreed and posts the plan to the ticket. Whether
+        Swoop then carries it out is a separate choice, under Execution — off by default, in which case a technician does.
+        Password, MFA and sign-in changes always ask the approver how they confirmed the requester’s identity.
       </Alert>
 
       <section className="card space-y-4 p-4">
@@ -396,8 +397,9 @@ export function CippSection({ tenant }: { tenant: Tenant }) {
     <div className="space-y-6">
       <Alert tone="info" title="Read-only lookups">
         With CIPP connected, Swoop looks up the user a proposal is about — whether the account exists, is enabled,
-        synced from on-premises, licensed and MFA-registered — so an approver sees the facts before agreeing. Swoop
-        only ever sends GET requests to CIPP.
+        synced from on-premises, licensed and MFA-registered — so an approver sees the facts before agreeing. Lookups
+        only send GET requests. Changes are sent only when Execution is switched on, for the clients and actions you
+        allow there.
       </Alert>
 
       <section className="card space-y-4 p-4">

@@ -203,6 +203,20 @@ export const LogIcon = (p: IconProps) => (
   </Svg>
 );
 
+export const BookIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2V5z" />
+    <path d="M4 19a2 2 0 0 1 2-2h13" />
+    <path d="M9 7h6" />
+  </Svg>
+);
+
+export const PlusIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M12 5v14M5 12h14" />
+  </Svg>
+);
+
 export const CopyIcon = (p: IconProps) => (
   <Svg {...p}>
     <rect x="9" y="9" width="13" height="13" rx="2" />

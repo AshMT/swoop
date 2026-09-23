@@ -15,7 +15,8 @@ import { ApprovalError, decide, expireStaleApprovals, listDecisions, REJECTION_R
 import { recordAudit } from '../../services/audit';
 import { investigate } from '../../services/agent/investigate';
 import type { SimilarTicket } from '../../services/triage/history';
-import { VERIFICATION_METHODS, EXECUTABLE_ACTIONS, type VerificationMethod } from '../../services/execution/actions';
+import { EXECUTABLE_ACTIONS, EXECUTION_TRAITS, needsAttestation, VERIFICATION_METHODS, type VerificationMethod } from '../../services/execution/actions';
+import { readAgentSettings } from '../../services/agent/settings';
 import {
   ExecutionRefused,
   executionReadiness,
@@ -295,6 +296,7 @@ router.get('/vocabulary', (_req, res) => {
     rejectionReasons: REJECTION_REASONS,
     verificationMethods: VERIFICATION_METHODS,
     executableActions: EXECUTABLE_ACTIONS,
+    attestationActions: Object.keys(EXECUTION_TRAITS).filter((id) => needsAttestation(id)),
   });
 });
 
@@ -488,9 +490,11 @@ router.get('/:id', async (req, res) => {
   // Build the SuperOps deep link server-side: the browser has no idea what the
   // tenant's console hostname is.
   let ticketUrl: string | null = null;
+  let agentEnabled = false;
   if (log.tenantId) {
     const [tenant] = await db.select().from(tenants).where(eq(tenants.id, log.tenantId)).limit(1);
     if (tenant) {
+      agentEnabled = readAgentSettings(tenant.agentSettings).enabled;
       try {
         ticketUrl = createPsaClient(tenant).ticketUrl({
           ticketId: log.ticketId,
@@ -527,6 +531,7 @@ router.get('/:id', async (req, res) => {
   res.json({
     ...hydrate(log),
     ticketUrl,
+    agentEnabled,
     decisions,
     cluster: cluster[0] ? { ...cluster[0], terms: safeParseArray(cluster[0].terms) } : null,
     history,
@@ -763,6 +768,10 @@ router.post(
     const [client] = await db.select().from(clients).where(eq(clients.id, row.clientId)).limit(1);
     if (!tenant || !client) {
       res.status(404).json({ error: 'Tenant or client not found' });
+      return;
+    }
+    if (!readAgentSettings(tenant.agentSettings).enabled) {
+      res.status(400).json({ error: 'The investigation agent is off for this tenant. An admin can turn it on under Settings → Agent.' });
       return;
     }
     const entities = safeParseEntities(typeof row.entities === 'string' ? row.entities : null);

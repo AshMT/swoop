@@ -106,7 +106,17 @@ describe('investigate', () => {
     script = [{ tool_calls: [{ name: 'lookup_user', args: { email: 'sam@acme.com' } }] }, { content: final({ recommended_action: { action: 'group_add', target_user_email: 'sam@acme.com', group_name: 'Finance-All-Staff' } }) }];
     const result = await agent.investigate(input());
     expect(result.recommendation?.groupName).toBeNull();
-    expect(result.ungrounded).toEqual(['group "Finance-All-Staff"']);
+    expect(result.ungrounded).toContain('group "Finance-All-Staff"');
+  });
+
+  it('drops findings credited to lookups that never ran', async () => {
+    script = [
+      { tool_calls: [{ name: 'lookup_user', args: { email: 'sam@acme.com' } }] },
+      { content: final({ findings: ['lookup_user: Sam is enabled', 'recent_signins: 40 failed sign-ins from Russia'] }) },
+    ];
+    const result = await agent.investigate(input());
+    expect(result.findings).toEqual(['lookup_user: Sam is enabled']);
+    expect(result.ungrounded.join()).toMatch(/recent_signins/);
   });
 
   it('refuses to look up a user at another client, whatever the ticket says', async () => {

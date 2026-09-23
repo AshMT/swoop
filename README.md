@@ -2,7 +2,9 @@
 
 **Open source AI ticket triage for MSPs.** Swoop reads every ticket from your PSA and does what a good dispatcher does in the first five minutes: works out what it is, how urgent it is, who should take it, what to say to the requester, and whether anything about it smells wrong. Where the ticket asks for a change in a client's Microsoft 365 tenant, it drafts the exact change and waits for a person to approve it.
 
-It does not make that change. Swoop's job is to be *measurably right* before anyone lets it do anything — so every verdict is reviewable, every approval is audited, and the accuracy figures come from your own technicians, not a vendor's benchmark.
+When you are ready, it can also investigate the ticket the way a technician would — look the user up in Microsoft 365, read your runbooks for that client, check past tickets — and, once a person approves, make the change through CIPP and read the tenant back to prove it worked. That part is off until you switch it on, per action and per client.
+
+Swoop's job is to be *measurably right* before anyone lets it do anything — so every verdict is reviewable, every approval and every change is audited, and the accuracy figures come from your own technicians, not a vendor's benchmark.
 
 Named for the Australian magpie: black and white, very observant, and quick to swoop on anything that does not belong.
 
@@ -34,8 +36,11 @@ For each new ticket from a client you have enabled, Swoop:
 5. **Computes the priority** from impact and urgency, then lets the checks raise it — never lower it.
 6. **Spots incidents** — a burst of similar problem tickets becomes one incident; several clients at once is flagged as probably upstream.
 7. **Looks the user up in CIPP** (read-only) when a change is proposed, and builds an **execution plan** from CIPP's real API.
-8. **Decides who must approve** under your policy — one person, two, or auto-approval for clean, confident, routine changes if you turn it on.
-9. **Posts a private note** with all of it, and logs everything for review.
+8. **Cites your runbooks** that match the ticket, and — if you turn the agent on — **investigates**: a tool-using model looks up the user, their groups, MFA and sign-ins, reads the runbooks and past tickets, and writes a diagnosis. It can only read.
+9. **Checks who is asking** against the client's authorised contacts, so "reset the MD's password" from the wrong person is blocked.
+10. **Decides who must approve** under your policy — one person, two, or auto-approval for clean, confident, routine changes if you turn it on.
+11. **Carries it out, if you let it** — after approval, for actions and clients you allow, through CIPP, with a dry run first and the result read back from the tenant.
+12. **Posts a private note** with all of it, and logs everything for review.
 
 ### The triage
 
@@ -73,7 +78,7 @@ For each new ticket from a client you have enabled, Swoop:
 | `FOLLOW_UP` | One specific question unblocks it |
 | `ESCALATE` | Needs a technician — most tickets, and the triage is the useful part |
 
-Endpoint names and body shapes follow CIPP's own OpenAPI spec. Plans are for a technician to carry out; Swoop has no code path that writes to a client tenant.
+Endpoint names and body shapes follow CIPP's own OpenAPI spec and handlers. Every action except `mailbox_permission` can be carried out by Swoop once [Execution](#execution) is on; until then, and always for mailbox permissions, a technician runs the plan.
 
 ---
 
@@ -184,6 +189,7 @@ Each client has a **Recognition** section:
 - **Email domains** — every domain its staff send from. Swoop suggests domains it has already seen on that client's tickets. Public providers like gmail.com are refused, and one domain cannot belong to two clients: that ambiguity is exactly what a cross-client request exploits.
 - **Microsoft 365 default domain** (and optionally the tenant ID) — what CIPP calls the tenant filter; needed for user lookups and plans.
 - **VIPs** — addresses whose tickets are raised one priority level.
+- **Authorised contacts** — who may ask for changes to *other people's* accounts. When set, a request from anyone else to reset someone's password or MFA, or change their access, is blocked until a technician confirms it with one of them. People can always ask about their own account.
 
 With domains set, Swoop can tell when a ticket filed under one client asks for a change to a user at another — a classic social-engineering move against MSPs, who hold admin rights in every client's tenant. Those tickets are escalated, routed to Security, and never looked up.
 
@@ -200,7 +206,9 @@ Every proposed change waits for a person. Under **Settings → Approvals**:
 - **Auto-approval** — off by default. When on, it applies only to actions you list, for clients you list, above a confidence you set, and never to sensitive actions, high-sensitivity or cross-client tickets, or anything with a warning flag or an unresolved plan blocker.
 - Decisions are posted to the ticket as a private note, with the plan and how to undo it.
 
-Approving signs off the plan. It does not run it.
+Password resets, MFA resets, re-enabling an account and mailbox access also ask the approver **how they confirmed the requester's identity** — a call-back to a known number, confirmation from an authorised contact, in person or video, a verified channel, or something they describe. Replying to the ticket email is not verification: that mailbox may be the thing that was compromised. Auto-approval never covers these.
+
+Approving signs off the plan. Whether Swoop then runs it is up to [Execution](#execution).
 
 ## People and roles
 
@@ -209,15 +217,62 @@ Invite colleagues from **People**. Swoop creates a one-time link, valid 72 hours
 | Role | Can |
 |---|---|
 | Viewer | See the queue, log, incidents and reports |
-| Reviewer | Also mark triage right or wrong, re-run tickets, acknowledge incidents |
-| Approver | Also approve or reject proposed changes |
+| Reviewer | Also mark triage right or wrong, re-run tickets, investigate, write runbooks, acknowledge incidents |
+| Approver | Also approve or reject proposed changes, run them, and reveal a temporary password once |
 | Admin | Also change settings, clients and people |
 
 Roles are checked on the server on every request, against the current database row — so demoting or disabling someone takes effect immediately, and changing your password signs out every other session. Swoop will not let you remove the last admin. Every approval, review, settings change and change to people lands in the **audit log**.
 
-## CIPP (optional, read-only)
+## CIPP (optional)
 
-Connect CIPP under **Settings → CIPP** with a CIPP-API client (CIPP → Integrations → CIPP-API → add and enable the client). When a change is proposed, Swoop reads the target user — whether they exist, sign-in state, on-premises sync, licences, groups, MFA registration — and turns that into prechecks on the plan: *already disabled*, *synced from AD so change it there*, *already a member*. Swoop only sends GET requests to CIPP.
+Connect CIPP under **Settings → CIPP** with a CIPP-API client (CIPP → Integrations → CIPP-API → add and enable the client). When a change is proposed, Swoop reads the target user — whether they exist, sign-in state, on-premises sync, licences, groups, MFA registration — and turns that into prechecks on the plan: *already disabled*, *synced from AD so change it there*, *already a member*. Lookups only send GET requests. Writes happen only through [Execution](#execution).
+
+## Knowledge
+
+The **Knowledge** page holds runbooks: how your desk does things, for all clients or for one. *"Finance share access is the Finance security group, not Finance-ReadOnly. The CEO approves."* Triage cites the runbooks that match each ticket, and the agent reads them before recommending anything. A client's own runbook is only ever shown on that client's tickets.
+
+If your SuperOps schema exposes its knowledge base, **Sync SuperOps KB** imports the articles read-only; edit them in SuperOps.
+
+Write group and licence names exactly as they appear in Microsoft 365. Never put passwords in a runbook.
+
+## Investigation agent
+
+Off by default, under **Settings → Agent**. When on, Swoop investigates tickets that propose a change (or every ticket, or only when a reviewer presses **Investigate**). The model gets read-only tools — look up a user, their groups, MFA state, recent sign-ins, find a group, licence stock, search and read runbooks, similar tickets, the client and requester profile — and a budget of lookups. Every lookup is confined to the ticket's own client: it cannot look up an address on a domain that client does not own.
+
+What comes back is checked before anyone sees it:
+
+- A user, group or licence the model names that no lookup returned is dropped, and the ticket says so.
+- A finding credited to a lookup that never ran is dropped.
+- The investigation can fill in the exact group or licence name for the triage's proposal, but never change the action or the user. If it disagrees, the ticket is flagged instead.
+
+It needs a model that supports tool calling on an OpenAI-compatible API; you can give it a stronger model than triage uses. Small local models often choose tools badly.
+
+## Execution
+
+Off by default, under **Settings → Execution**, and switched off for the whole install by `SWOOP_DISABLE_EXECUTION=1`.
+
+| Mode | What happens |
+|---|---|
+| Off | Swoop proposes and plans; a technician makes the change |
+| Dry runs only | An approver can have Swoop resolve the plan against the live tenant and show exactly what it would send. Nothing is sent |
+| Live | Approved changes can be carried out, for the actions and clients you tick |
+
+Nothing is allowed until you tick it: each action and each client is opted in, and a client added later is excluded until you add it. A live run needs:
+
+- an approved (not expired, not superseded) proposal with no plan blockers, on a client that is not part of a cross-client request;
+- for identity-sensitive actions, a person's approval that recorded how the requester was verified — never auto-approval;
+- a passing dry run from the last 24 hours, unless you turn that off.
+
+Then Swoop:
+
+1. **Resolves** everything against the live tenant: the user by address (on a domain the client owns), the group by exact name — refusing duplicates, dynamic groups, groups synced from on-premises and role-assignable groups — and the licence by exact or unique name with seats free. Users synced from AD are not disabled from the cloud. If the change is already in place it stops and says so.
+2. **Sends** the request once. Writes are never retried: if CIPP does not answer, the outcome is recorded as *unknown*, and nothing runs again until a person checks the tenant and records what happened.
+3. **Reads the tenant back** — group membership, licences, sign-in state, password-change time — because CIPP answers HTTP 200 for many failures. A change that is not visible is not reported as done.
+4. **Records** the result on the ticket as a private note with how to undo it, optionally tells the requester, and audits it.
+
+A temporary password is never written to the ticket, a note, a log or the audit trail. It is encrypted, shown **once** to an approver who asks for it (and the reveal is audited), and deleted after 24 hours if nobody does. A proposal can be carried out live only once.
+
+The CIPP API client needs a role that can write users and groups. With a read-only role, runs stop at the first write and say so.
 
 ---
 
@@ -281,7 +336,10 @@ Under **Settings → Behaviour**:
 - The only unauthenticated endpoints are `/health`, `/api/setup/status`, and first-run admin creation, which works exactly once.
 - Ticket text is treated as untrusted input: it is fenced and labelled in the prompt, and the model is instructed to ignore instructions inside it. Deterministic checks can raise scrutiny but never lower it, so a ticket cannot talk its way past them.
 - Four roles, checked server-side on every request against the live user row. Password changes and disabling revoke sessions immediately. Every consequential action is audited.
-- Swoop never writes to a client tenant. The CIPP client exposes GET only; approval produces a plan for a person.
+- Nothing is written to a client tenant unless execution is on, the action and client are allowlisted, and a person approved it. The lookup client and the agent's tools can only send GET requests; one module, used only by the executor, can write, and a test enforces that.
+- The agent's lookups are confined to the ticket's own client, and what it says is checked against what its lookups returned.
+- Identity-sensitive changes need a recorded identity check, and requests on someone else's behalf must come from an authorised contact when the client has any.
+- Temporary passwords are encrypted, revealed once, never logged, and wiped after 24 hours.
 - A request that reaches from one client into another's tenant is escalated, and the target is never looked up.
 - CSV exports are protected against formula injection.
 - The container starts as root only to fix data-folder ownership, then drops to `PUID:PGID` before Swoop starts; the app never runs as root, and `PUID=0` is refused.
@@ -310,6 +368,7 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
 | `SUPEROPS_API_URL` | no | — | Override the endpoint, e.g. an egress proxy |
 | `PUID` / `PGID` | no | `1000` / `1000` | User the app runs as in the container. Unraid: `99` / `100` |
 | `CIPP_AUTHORITY_URL` | no | `https://login.microsoftonline.com` | Entra authority for CIPP tokens. Change for a sovereign cloud |
+| `SWOOP_DISABLE_EXECUTION` | no | off | Set to `1` to stop Swoop changing any client tenant, whatever the settings say |
 
 Anything configured through the UI is stored encrypted and takes precedence over the environment.
 
@@ -333,9 +392,9 @@ Back up `ENCRYPTION_KEY` alongside it. Without the key, the stored credentials c
 
 ## Roadmap
 
-Swoop triages, recognises, plans and gathers approvals. It does not execute. That is a deliberate stage.
+Swoop triages, recognises, investigates, plans, gathers approvals and — when you allow it — carries changes out and proves they took effect.
 
-**Next: execution, deliberately.** The plans already name the exact CIPP calls, and approvals and the audit trail are in place. What remains is a CIPP client that can write, behind its own switch, with per-action opt-in, a re-check of the prechecks immediately before running, and the result written back to the ticket. It should be switched on one action at a time, once that action's agreement rate has held on real tickets.
+**Turning execution on, deliberately.** Start in dry-run mode and read what it would send. Then allow one action for one client, once that action's agreement rate has held on real tickets. Mailbox permissions stay plan-only until Swoop can read them back.
 
 **Also on the list:** writing priority and queue back to SuperOps once its ticket-update mutation has been confirmed against a real instance; follow-up questions posted as public replies; embeddings as an optional upgrade to the lexical similarity.
 

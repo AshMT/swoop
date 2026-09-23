@@ -206,6 +206,22 @@ describe('live runs', () => {
     expect(state.writes).toHaveLength(1);
   });
 
+  it('keeps the proposal marked done when someone dry-runs it again afterwards', async () => {
+    const { db } = await import('../src/db');
+    const { actionLogs } = await import('../src/db/schema');
+    const { eq } = await import('drizzle-orm');
+    const id = await proposal('group_add', { target_user_email: 'sam@acme.com', group_name: 'Finance' });
+    const dry = await run(id, 'dry_run');
+    let [row] = await db.select().from(actionLogs).where(eq(actionLogs.id, id));
+    expect(dry.status).toBe('dry_run_ok');
+    expect(row.executionState).toBeNull();
+    await run(id, 'live');
+    const again = await run(id, 'dry_run');
+    expect(again.summary).toMatch(/Nothing to do/);
+    [row] = await db.select().from(actionLogs).where(eq(actionLogs.id, id));
+    expect(row.executionState).toBe('succeeded');
+  });
+
   it('treats CIPP’s "Success" as unproven until the tenant shows it', async () => {
     state.mode.editGroupSilentNoop = true;
     const id = await proposal('group_add', { target_user_email: 'tom@acme.com', group_name: 'Finance' });
@@ -254,6 +270,11 @@ describe('live runs', () => {
     const live = await dryThenLive(id);
     expect(live.status).toBe('failed');
     expect(live.summary).toMatch(/Insufficient privileges/);
+    const { db } = await import('../src/db');
+    const { auditLog } = await import('../src/db/schema');
+    const { and, eq } = await import('drizzle-orm');
+    const audited = await db.select().from(auditLog).where(and(eq(auditLog.action, 'execution.failed'), eq(auditLog.targetId, id)));
+    expect(audited).toHaveLength(1);
     state.mode.failOn = undefined;
     expect((await run(id, 'live')).status).toBe('succeeded');
   });

@@ -7,6 +7,7 @@ import { applyTheme, readTheme, resolveTheme, watchSystemTheme, writeTheme, type
 import { formatRelative } from '../lib/format';
 import {
   ApprovalIcon,
+  BookIcon,
   CalibrationIcon,
   ClientsIcon,
   IncidentIcon,
@@ -27,6 +28,7 @@ const NAV: Array<{ to: string; label: string; Icon: (p: { className?: string }) 
   { to: '/queue', label: 'Triage queue', Icon: QueueIcon, min: 'viewer', badge: 'queue' },
   { to: '/approvals', label: 'Approvals', Icon: ApprovalIcon, min: 'viewer', badge: 'approvals' },
   { to: '/incidents', label: 'Incidents', Icon: IncidentIcon, min: 'viewer', badge: 'incidents' },
+  { to: '/knowledge', label: 'Knowledge', Icon: BookIcon, min: 'viewer' },
   { to: '/log', label: 'Activity log', Icon: LogIcon, min: 'viewer' },
   { to: '/calibration', label: 'Calibration', Icon: CalibrationIcon, min: 'viewer' },
   { to: '/clients', label: 'Clients', Icon: ClientsIcon, min: 'viewer' },

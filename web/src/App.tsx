@@ -15,6 +15,7 @@ import Queue from './pages/Queue';
 import TicketDetail from './pages/TicketDetail';
 import Approvals from './pages/Approvals';
 import Incidents from './pages/Incidents';
+import Knowledge from './pages/Knowledge';
 import People from './pages/People';
 import AcceptInvite from './pages/AcceptInvite';
 
@@ -157,6 +158,14 @@ export default function App() {
               element={
                 <ErrorBoundary label="The calibration report">
                   <Calibration />
+                </ErrorBoundary>
+              }
+            />
+            <Route
+              path="/knowledge"
+              element={
+                <ErrorBoundary label="Knowledge">
+                  <Knowledge />
                 </ErrorBoundary>
               }
             />

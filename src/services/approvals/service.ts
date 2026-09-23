@@ -10,6 +10,7 @@ import { createPsaClient } from '../psa/factory';
 import { readApprovalPolicy } from './policy';
 import type { ExecutionPlan } from './plan';
 import { needsAttestation, VERIFICATION_METHODS, type VerificationMethod } from '../execution/actions';
+import { effectiveMode, readExecutionPolicy } from '../execution/policy';
 
 const log = createLogger('Approvals');
 
@@ -188,6 +189,10 @@ async function postDecisionNote(actionLogId: string): Promise<void> {
         (d.reason ? ` (${REJECTION_REASONS.find((r) => r.id === d.reason)?.label ?? d.reason})` : '') +
         (d.comment ? `: ${d.comment}` : ''),
     );
+    if (d.verificationMethod) {
+      const method = VERIFICATION_METHODS.find((m) => m.id === d.verificationMethod)?.label ?? d.verificationMethod;
+      lines.push(`  Identity confirmed: ${method}${d.verificationNote ? ` — ${d.verificationNote}` : ''}`);
+    }
   }
 
   if (row.approvalState === 'approved' && row.executionPlan) {
@@ -204,6 +209,19 @@ async function postDecisionNote(actionLogId: string): Promise<void> {
     }
   }
 
-  lines.push('', '---', 'Swoop does not carry out actions. A technician makes this change.');
+  const policy = readExecutionPolicy(tenant.executionPolicy);
+  const willRun =
+    row.approvalState === 'approved' &&
+    policy.runOnApproval &&
+    effectiveMode(policy) === 'live' &&
+    policy.actions.includes(row.classification ?? '') &&
+    Boolean(row.clientId && policy.clientIds.includes(row.clientId));
+  lines.push(
+    '',
+    '---',
+    willRun
+      ? 'Swoop will now make this change through CIPP, check it took effect, and post the result here.'
+      : 'Swoop has not made this change. A technician makes it, or runs it from the ticket in Swoop.',
+  );
   await createPsaClient(tenant).addTicketNote(row.ticketId, lines.join('\n'), true);
 }

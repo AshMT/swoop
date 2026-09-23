@@ -271,3 +271,72 @@ describe('per-dimension calibration', () => {
     expect(res.body.dimensions.category.confusion[0]).toMatchObject({ predicted: 'printing', actual: 'network' });
   });
 });
+
+describe('execution, agent and knowledge settings', () => {
+  it('keeps execution off until an admin allowlists actions and this tenant’s clients', async () => {
+    const policies = await as('admin', request(app).get(`/api/tenants/${tenantId}/policies`)).expect(200);
+    expect(policies.body.executionPolicy).toMatchObject({ mode: 'off', actions: [], clientIds: [] });
+    expect(policies.body.agentSettings).toMatchObject({ enabled: false });
+
+    await as('approver', request(app).patch(`/api/tenants/${tenantId}`))
+      .send({ executionPolicy: { mode: 'live', actions: ['group_add'], clientIds: [clientId] } })
+      .expect(403);
+    await as('admin', request(app).patch(`/api/tenants/${tenantId}`))
+      .send({ executionPolicy: { mode: 'live', actions: ['mailbox_permission'], clientIds: [clientId] } })
+      .expect(400);
+    const foreign = await as('admin', request(app).patch(`/api/tenants/${tenantId}`))
+      .send({ executionPolicy: { mode: 'live', actions: ['group_add'], clientIds: ['not-a-client-here'] } })
+      .expect(400);
+    expect(foreign.body.error).toMatch(/not in this tenant/);
+
+    await as('admin', request(app).patch(`/api/tenants/${tenantId}`))
+      .send({ executionPolicy: { mode: 'dry_run', actions: ['group_add'], clientIds: [clientId] } })
+      .expect(200);
+    const audit = await as('admin', request(app).get('/api/users/audit?limit=20')).expect(200);
+    const actions = (audit.body.items ?? audit.body).map((e: { action: string }) => e.action);
+    expect(actions).toEqual(expect.arrayContaining(['execution.mode_change', 'execution.policy_change']));
+    await as('admin', request(app).patch(`/api/tenants/${tenantId}`)).send({ executionPolicy: { mode: 'off' } }).expect(200);
+  });
+
+  it('only approvers run changes or reveal secrets, and nothing runs while execution is off', async () => {
+    const { db } = await import('../src/db');
+    const { actionLogs } = await import('../src/db/schema');
+    const id = 'e1111111-1111-4111-8111-111111111111';
+    await db.insert(actionLogs).values({
+      id,
+      tenantId,
+      clientId,
+      ticketId: 'T-EXEC',
+      classification: 'group_add',
+      confidence: 0.95,
+      status: 'classified',
+      approvalState: 'approved',
+      entities: JSON.stringify({ target_user_email: 'sam@acme.com', group_name: 'Finance' }),
+    });
+    await as('reviewer', request(app).post(`/api/actions/${id}/execute`)).send({ mode: 'dry_run' }).expect(403);
+    await as('reviewer', request(app).post('/api/actions/executions/anything/reveal')).expect(403);
+    const refused = await as('approver', request(app).post(`/api/actions/${id}/execute`)).send({ mode: 'dry_run' }).expect(409);
+    expect(refused.body.error).toMatch(/Execution is off/);
+    const state = await as('reviewer', request(app).get(`/api/actions/${id}/executions`)).expect(200);
+    expect(state.body.readiness).toMatchObject({ mode: 'off', canDryRun: false, canRunLive: false });
+  });
+
+  it('will not investigate while the agent is off', async () => {
+    const res = await as('reviewer', request(app).post('/api/actions/e1111111-1111-4111-8111-111111111111/investigate')).expect(400);
+    expect(res.body.error).toMatch(/agent is off/);
+    const detail = await as('reviewer', request(app).get('/api/actions/e1111111-1111-4111-8111-111111111111')).expect(200);
+    expect(detail.body.agentEnabled).toBe(false);
+  });
+
+  it('lets reviewers write runbooks and searches them per client', async () => {
+        await as('reviewer', request(app).post('/api/knowledge'))
+      .send({ tenantId, clientId, title: 'Acme finance', body: 'Finance access means the Finance security group.' })
+      .expect(201);
+    const general = await as('reviewer', request(app).get(`/api/knowledge/search?tenantId=${tenantId}&q=finance%20access&scope=general`)).expect(200);
+    expect(general.body).toEqual([]);
+    const scoped = await as('reviewer', request(app).get(`/api/knowledge/search?tenantId=${tenantId}&q=finance%20access&clientId=${clientId}`)).expect(200);
+    expect(scoped.body[0]).toMatchObject({ title: 'Acme finance', clientSpecific: true });
+    const all = await as('reviewer', request(app).get(`/api/knowledge/search?tenantId=${tenantId}&q=finance%20access&scope=all`)).expect(200);
+    expect(all.body).toHaveLength(1);
+  });
+});
