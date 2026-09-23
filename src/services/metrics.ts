@@ -80,7 +80,53 @@ export interface CalibrationReport {
     firstSeenAt: number | null;
     lastSeenAt: number | null;
   }>;
+  /**
+   * Accuracy of the triage beyond the action: was the category right, was the
+   * priority right. Scored separately because they fail separately — a model
+   * can pick the right action at the wrong urgency.
+   */
+  dimensions: {
+    category: DimensionScore;
+    priority: DimensionScore & {
+      /** Predicted more urgent than the technician judged. */
+      tooHigh: number;
+      /** Predicted less urgent — the costlier mistake. */
+      tooLow: number;
+    };
+  };
 }
+
+export interface DimensionScore {
+  reviewed: number;
+  correct: number;
+  agreement: number | null;
+  confusion: ConfusionCell[];
+}
+
+interface ReviewFields {
+  classification: string | null;
+  reviewVerdict: string | null;
+  reviewCorrect: string | null;
+  reviewCorrectCategory?: string | null;
+  reviewCorrectPriority?: string | null;
+}
+
+/**
+ * The verdict on the *action*, as distinct from the whole triage.
+ *
+ * A review can mark a ticket incorrect only because the priority was wrong.
+ * Counting that against the action would understate action accuracy, which is
+ * the number that decides whether a proposal can be trusted. An "incorrect"
+ * with no dimension named keeps its old meaning: the action was wrong.
+ */
+export function actionVerdict(row: ReviewFields): 'correct' | 'incorrect' | null {
+  if (row.reviewVerdict === 'correct') return 'correct';
+  if (row.reviewVerdict !== 'incorrect') return null;
+  if (row.reviewCorrect) return row.reviewCorrect === row.classification ? 'correct' : 'incorrect';
+  return row.reviewCorrectCategory || row.reviewCorrectPriority ? 'correct' : 'incorrect';
+}
+
+const PRIORITY_RANK: Record<string, number> = { P1: 1, P2: 2, P3: 3, P4: 4 };
 
 /** Below this many reviews, an agreement percentage is noise. */
 export const MINIMUM_SAMPLE_SIZE = 20;
@@ -119,6 +165,10 @@ export async function buildCalibrationReport(query: MetricsQuery = {}): Promise<
       status: actionLogs.status,
       reviewVerdict: actionLogs.reviewVerdict,
       reviewCorrect: actionLogs.reviewCorrectClassification,
+      reviewCorrectCategory: actionLogs.reviewCorrectCategory,
+      reviewCorrectPriority: actionLogs.reviewCorrectPriority,
+      category: actionLogs.category,
+      priority: actionLogs.priority,
       latencyMs: actionLogs.aiLatencyMs,
       notePosted: actionLogs.notePosted,
       createdAt: actionLogs.createdAt,
@@ -128,8 +178,10 @@ export async function buildCalibrationReport(query: MetricsQuery = {}): Promise<
     .from(actionLogs)
     .where(where);
 
-  const classified = rows.filter((r) => r.status !== 'ai_failed' && r.classification);
-  const failed = rows.filter((r) => r.status === 'ai_failed');
+  // Everything below scores the action, so read the verdict at that level.
+  const scored = rows.map((row) => ({ ...row, triageVerdict: row.reviewVerdict, reviewVerdict: actionVerdict(row) }));
+  const classified = scored.filter((r) => r.status !== 'ai_failed' && r.classification);
+  const failed = scored.filter((r) => r.status === 'ai_failed');
 
   const reviewedRows = classified.filter((r) => r.reviewVerdict === 'correct' || r.reviewVerdict === 'incorrect');
   const correctRows = reviewedRows.filter((r) => r.reviewVerdict === 'correct');
@@ -296,6 +348,60 @@ export async function buildCalibrationReport(query: MetricsQuery = {}): Promise<
     },
     daily,
     promptVersions,
+    dimensions: scoreDimensions(classified),
+  };
+}
+
+function scoreDimensions(
+  rows: Array<{
+    triageVerdict: string | null;
+    category: string | null;
+    priority: string | null;
+    reviewCorrectCategory: string | null;
+    reviewCorrectPriority: string | null;
+  }>,
+): CalibrationReport['dimensions'] {
+  const score = (predictedOf: (r: (typeof rows)[number]) => string | null, correctedOf: (r: (typeof rows)[number]) => string | null) => {
+    let reviewed = 0;
+    let correct = 0;
+    const confusion = new Map<string, number>();
+    const misses: Array<{ predicted: string; actual: string }> = [];
+    for (const row of rows) {
+      const predicted = predictedOf(row);
+      if (!predicted || (row.triageVerdict !== 'correct' && row.triageVerdict !== 'incorrect')) continue;
+      reviewed++;
+      const corrected = row.triageVerdict === 'incorrect' ? correctedOf(row) : null;
+      if (!corrected || corrected === predicted) {
+        correct++;
+        continue;
+      }
+      misses.push({ predicted, actual: corrected });
+      const key = `${predicted}\u0000${corrected}`;
+      confusion.set(key, (confusion.get(key) ?? 0) + 1);
+    }
+    return {
+      reviewed,
+      correct,
+      agreement: reviewed > 0 ? correct / reviewed : null,
+      confusion: [...confusion.entries()]
+        .map(([key, count]) => {
+          const [predicted, actual] = key.split('\u0000');
+          return { predicted, actual, count };
+        })
+        .sort((a, b) => b.count - a.count),
+      misses,
+    };
+  };
+
+  const { misses: _categoryMisses, ...category } = score((r) => r.category, (r) => r.reviewCorrectCategory);
+  const { misses: priorityMisses, ...priority } = score((r) => r.priority, (r) => r.reviewCorrectPriority);
+  return {
+    category,
+    priority: {
+      ...priority,
+      tooHigh: priorityMisses.filter((m) => (PRIORITY_RANK[m.predicted] ?? 0) < (PRIORITY_RANK[m.actual] ?? 0)).length,
+      tooLow: priorityMisses.filter((m) => (PRIORITY_RANK[m.predicted] ?? 0) > (PRIORITY_RANK[m.actual] ?? 0)).length,
+    },
   };
 }
 
@@ -337,7 +443,15 @@ export async function buildQuickStats(query: MetricsQuery = {}): Promise<{
       highSensitivity: sql<number>`sum(case when ${actionLogs.sensitivity} = 'high' then 1 else 0 end)`,
       failures: sql<number>`sum(case when ${actionLogs.status} = 'ai_failed' then 1 else 0 end)`,
       reviewed: sql<number>`sum(case when ${actionLogs.reviewVerdict} in ('correct','incorrect') then 1 else 0 end)`,
-      correct: sql<number>`sum(case when ${actionLogs.reviewVerdict} = 'correct' then 1 else 0 end)`,
+      // Mirrors actionVerdict(): an "incorrect" that only corrected the
+      // category or priority still counts the action as right.
+      correct: sql<number>`sum(case
+        when ${actionLogs.reviewVerdict} = 'correct' then 1
+        when ${actionLogs.reviewVerdict} = 'incorrect' and ${actionLogs.reviewCorrectClassification} is not null
+          and ${actionLogs.reviewCorrectClassification} = ${actionLogs.classification} then 1
+        when ${actionLogs.reviewVerdict} = 'incorrect' and ${actionLogs.reviewCorrectClassification} is null
+          and (${actionLogs.reviewCorrectCategory} is not null or ${actionLogs.reviewCorrectPriority} is not null) then 1
+        else 0 end)`,
       awaitingReview: sql<number>`sum(case when ${actionLogs.reviewVerdict} is null and ${actionLogs.status} != 'ai_failed' then 1 else 0 end)`,
     })
     .from(actionLogs)

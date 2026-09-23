@@ -493,7 +493,7 @@ export default function Setup({ onComplete }: { onComplete: () => void }) {
               <button
                 onClick={() => {
                   onComplete();
-                  window.location.assign('/dashboard');
+                  window.location.assign('/queue');
                 }}
                 className="btn-primary w-full"
               >

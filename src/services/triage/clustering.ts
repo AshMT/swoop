@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { db } from '../../db';
 import { actionLogs, incidentClusters } from '../../db/schema';
 import { rankSimilar } from './similarity';
+import type { TriageSignal } from './signals';
 
 /**
  * Incident clustering: noticing that five tickets in twenty minutes are one
@@ -17,6 +18,38 @@ import { rankSimilar } from './similarity';
 
 const SIMILAR_ENOUGH = 0.35;
 const PROBLEM_CLASSIFICATIONS = ['ESCALATE', 'FOLLOW_UP'];
+/**
+ * A ticket that turns out to be part of an incident deserves the incident's
+ * urgency, even though it was triaged before anyone knew there was one.
+ */
+async function raiseMembers(logIds: string[], clusterId: string, crossClient: boolean, size: number): Promise<void> {
+  if (logIds.length === 0) return;
+  const rows = await db
+    .select({ id: actionLogs.id, priority: actionLogs.priority, signals: actionLogs.signals })
+    .from(actionLogs)
+    .where(inArray(actionLogs.id, logIds));
+  for (const row of rows) {
+    let signals: TriageSignal[] = [];
+    try {
+      signals = row.signals ? (JSON.parse(row.signals) as TriageSignal[]) : [];
+    } catch {
+      signals = [];
+    }
+    const signal: TriageSignal = {
+      id: 'incident_cluster',
+      label: crossClient ? 'Multi-client incident' : 'Possible incident',
+      detail: `Grouped with ${size - 1} similar ticket${size === 2 ? '' : 's'} after it arrived`,
+      severity: 'critical',
+    };
+    const next = signals.filter((s) => s.id !== 'incident_cluster').concat(signal);
+    const raised = row.priority === 'P3' || row.priority === 'P4' || !row.priority ? 'P2' : row.priority;
+    await db
+      .update(actionLogs)
+      .set({ clusterId, priority: raised, signals: JSON.stringify(next) })
+      .where(eq(actionLogs.id, row.id));
+  }
+}
+
 /** Same client and same category need less textual overlap to be related. */
 const SIMILAR_SAME_CATEGORY = 0.15;
 
@@ -130,20 +163,22 @@ export async function clusterTicket(input: {
       })
       .from(actionLogs)
       .where(eq(actionLogs.clusterId, existingId));
+    const clientsInCluster = await db
+      .selectDistinct({ clientId: actionLogs.clientId })
+      .from(actionLogs)
+      .where(eq(actionLogs.clusterId, existingId));
     // +1 for this ticket, not inserted yet; its client may be new to the cluster.
+    const isNewClient = !clientsInCluster.some((c) => c.clientId === input.clientId);
+    const size = Number(counts?.tickets ?? 0) + 1;
+    const clientCount = Number(counts?.clients ?? 0) + (isNewClient ? 1 : 0);
+
+    await raiseMembers(untagged, existingId, clientCount > 1, size);
+
     const [cluster] = await db
       .select()
       .from(incidentClusters)
       .where(eq(incidentClusters.id, existingId))
       .limit(1);
-    const clientsInCluster = await db
-      .selectDistinct({ clientId: actionLogs.clientId })
-      .from(actionLogs)
-      .where(eq(actionLogs.clusterId, existingId));
-    const isNewClient = !clientsInCluster.some((c) => c.clientId === input.clientId);
-    const size = Number(counts?.tickets ?? 0) + 1;
-    const clientCount = Number(counts?.clients ?? 0) + (isNewClient ? 1 : 0);
-
     await db
       .update(incidentClusters)
       .set({
@@ -187,10 +222,12 @@ export async function clusterTicket(input: {
     firstSeenAt: earliest,
     lastSeenAt: now,
   });
-  await db
-    .update(actionLogs)
-    .set({ clusterId })
-    .where(inArray(actionLogs.id, neighbours.map((n) => n.id)));
+  await raiseMembers(
+    neighbours.map((n) => n.id),
+    clusterId,
+    crossClient,
+    neighbours.length + 1,
+  );
 
   return {
     clusterId,

@@ -228,3 +228,37 @@ describe('approvals', () => {
     expect(detail.body.approvalState).toBe('expired');
   });
 });
+
+describe('per-dimension calibration', () => {
+  it('scores the action, category and priority separately', async () => {
+    const { db } = await import('../src/db');
+    const { actionLogs } = await import('../src/db/schema');
+    const base = { tenantId, clientId, confidence: 0.9, status: 'classified', classification: 'ESCALATE', category: 'printing' };
+    await db.insert(actionLogs).values([
+      // Right on everything.
+      { ...base, id: 'd1111111-1111-4111-8111-111111111111', ticketId: 'D-1', priority: 'P3' },
+      // Action right, priority under-called.
+      { ...base, id: 'd2222222-2222-4222-8222-222222222222', ticketId: 'D-2', priority: 'P4' },
+      // Action right, category wrong.
+      { ...base, id: 'd3333333-3333-4333-8333-333333333333', ticketId: 'D-3', priority: 'P3' },
+    ]);
+    await as('reviewer', request(app).post('/api/actions/d1111111-1111-4111-8111-111111111111/review')).send({ verdict: 'correct' }).expect(200);
+    await as('reviewer', request(app).post('/api/actions/d2222222-2222-4222-8222-222222222222/review'))
+      .send({ verdict: 'incorrect', correctPriority: 'P2' })
+      .expect(200);
+    await as('reviewer', request(app).post('/api/actions/d3333333-3333-4333-8333-333333333333/review'))
+      .send({ verdict: 'incorrect', correctCategory: 'network' })
+      .expect(200);
+    await as('reviewer', request(app).post('/api/actions/d3333333-3333-4333-8333-333333333333/review'))
+      .send({ verdict: 'incorrect', correctCategory: 'astrology' })
+      .expect(400);
+
+    const res = await as('viewer2' in tokens ? 'viewer2' : 'reviewer', request(app).get(`/api/actions/metrics?tenantId=${tenantId}`)).expect(200);
+    const escalate = res.body.byClassification.find((b: { classification: string }) => b.classification === 'ESCALATE');
+    expect(escalate).toMatchObject({ reviewed: 3, correct: 3 });
+    // The approved MFA reset from earlier also carries a priority.
+    expect(res.body.dimensions.priority).toMatchObject({ reviewed: 4, correct: 3, tooLow: 1, tooHigh: 0 });
+    expect(res.body.dimensions.category).toMatchObject({ reviewed: 3, correct: 2 });
+    expect(res.body.dimensions.category.confusion[0]).toMatchObject({ predicted: 'printing', actual: 'network' });
+  });
+});

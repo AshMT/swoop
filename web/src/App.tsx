@@ -11,6 +11,12 @@ import Dashboard from './pages/Dashboard';
 import Calibration from './pages/Calibration';
 import Clients from './pages/Clients';
 import Settings from './pages/Settings';
+import Queue from './pages/Queue';
+import TicketDetail from './pages/TicketDetail';
+import Approvals from './pages/Approvals';
+import Incidents from './pages/Incidents';
+import People from './pages/People';
+import AcceptInvite from './pages/AcceptInvite';
 
 export default function App() {
   const [loading, setLoading] = useState(true);
@@ -84,21 +90,64 @@ export default function App() {
             path="/setup"
             element={
               setupComplete ? (
-                <Navigate to="/dashboard" replace />
+                <Navigate to="/queue" replace />
               ) : (
                 <Setup onComplete={() => setSetupComplete(true)} />
               )
             }
           />
-          <Route path="/login" element={token ? <Navigate to="/dashboard" replace /> : <Login />} />
-          <Route path="/" element={guard(<Navigate to="/dashboard" replace />)} />
+          <Route path="/login" element={token ? <Navigate to="/queue" replace /> : <Login />} />
+          {/* Public: an invitation is how a new person gets a token at all. */}
+          <Route path="/invite/:token" element={<AcceptInvite />} />
+          <Route path="/" element={guard(<Navigate to="/queue" replace />)} />
+          <Route path="/dashboard" element={<Navigate to="/queue" replace />} />
           <Route element={guard(<Layout />)}>
             {/* Boundaries sit inside the layout so a failing page keeps the
                 navigation, the health banner and the theme toggle usable. */}
             <Route
-              path="/dashboard"
+              path="/queue"
               element={
-                <ErrorBoundary label="The dashboard">
+                <ErrorBoundary label="The triage queue">
+                  <Queue />
+                </ErrorBoundary>
+              }
+            />
+            <Route
+              path="/tickets/:id"
+              element={
+                <ErrorBoundary label="This ticket">
+                  <TicketDetail />
+                </ErrorBoundary>
+              }
+            />
+            <Route
+              path="/approvals"
+              element={
+                <ErrorBoundary label="Approvals">
+                  <Approvals />
+                </ErrorBoundary>
+              }
+            />
+            <Route
+              path="/incidents"
+              element={
+                <ErrorBoundary label="Incidents">
+                  <Incidents />
+                </ErrorBoundary>
+              }
+            />
+            <Route
+              path="/people"
+              element={
+                <ErrorBoundary label="People">
+                  <People />
+                </ErrorBoundary>
+              }
+            />
+            <Route
+              path="/log"
+              element={
+                <ErrorBoundary label="The activity log">
                   <Dashboard />
                 </ErrorBoundary>
               }

@@ -3,6 +3,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   changePassword,
   errorMessage,
+  logoutEverywhere,
+  setToken,
   getCapabilities,
   getDefaultPrompt,
   getLogStorage,
@@ -20,20 +22,28 @@ import {
 } from '../api';
 import { Alert, Badge, LoadingState, PageHeader, Spinner, Toggle, useToast } from '../components/ui';
 import { formatBytes, formatDate, formatDateTime, formatDuration, formatRelative } from '../lib/format';
+import { useCan } from '../lib/session';
+import { ApprovalSection, CippSection, TriageSection } from '../components/settings/PolicySections';
 
-type Tab = 'connection' | 'ai' | 'behaviour' | 'prompt' | 'diagnostics' | 'account';
+type Tab = 'connection' | 'ai' | 'behaviour' | 'triage' | 'approvals' | 'cipp' | 'prompt' | 'diagnostics' | 'account';
 
-const TABS: Array<{ id: Tab; label: string }> = [
-  { id: 'connection', label: 'SuperOps' },
-  { id: 'ai', label: 'AI provider' },
-  { id: 'behaviour', label: 'Behaviour' },
-  { id: 'prompt', label: 'Prompt' },
-  { id: 'diagnostics', label: 'Diagnostics' },
-  { id: 'account', label: 'Account' },
+const TABS: Array<{ id: Tab; label: string; adminOnly: boolean }> = [
+  { id: 'connection', label: 'SuperOps', adminOnly: true },
+  { id: 'ai', label: 'AI provider', adminOnly: true },
+  { id: 'behaviour', label: 'Behaviour', adminOnly: true },
+  { id: 'triage', label: 'Triage rules', adminOnly: true },
+  { id: 'approvals', label: 'Approvals', adminOnly: true },
+  { id: 'cipp', label: 'CIPP', adminOnly: true },
+  { id: 'prompt', label: 'Prompt', adminOnly: true },
+  { id: 'diagnostics', label: 'Diagnostics', adminOnly: true },
+  { id: 'account', label: 'Account', adminOnly: false },
 ];
 
 export default function Settings() {
-  const [tab, setTab] = useState<Tab>('connection');
+  const isAdmin = useCan('admin');
+  const [chosen, setTab] = useState<Tab>('connection');
+  // Everyone can manage their own account; only admins see the tenant settings.
+  const tab: Tab = isAdmin ? chosen : 'account';
   const { data: tenants, isLoading } = useQuery({
     queryKey: ['tenants'],
     queryFn: () => getTenants().then((r) => r.data),
@@ -65,7 +75,7 @@ export default function Settings() {
       <PageHeader title="Settings" description={`${tenant.name} · ${tenant.superopsSubdomain}`} />
 
       <div className="mb-6 flex flex-wrap gap-1 border-b border-slate-200 dark:border-slate-800">
-        {TABS.map((item) => (
+        {TABS.filter((item) => isAdmin || !item.adminOnly).map((item) => (
           <button
             key={item.id}
             onClick={() => setTab(item.id)}
@@ -84,6 +94,9 @@ export default function Settings() {
         {tab === 'connection' && <SuperOpsSection tenant={tenant} />}
         {tab === 'ai' && <AiSection tenant={tenant} />}
         {tab === 'behaviour' && <BehaviourSection tenant={tenant} />}
+        {tab === 'triage' && <TriageSection tenant={tenant} />}
+        {tab === 'approvals' && <ApprovalSection tenant={tenant} />}
+        {tab === 'cipp' && <CippSection tenant={tenant} />}
         {tab === 'prompt' && <PromptSection tenant={tenant} />}
         {tab === 'diagnostics' && <DiagnosticsSection tenant={tenant} />}
         {tab === 'account' && <AccountSection />}
@@ -1034,6 +1047,8 @@ function AccountSection() {
         setState('saving');
         try {
           const res = await changePassword(current, next);
+          // Changing the password signs out every other session; keep this one.
+          if (res.data.token) setToken(res.data.token);
           setCurrent('');
           setNext('');
           setConfirm('');
@@ -1090,6 +1105,25 @@ function AccountSection() {
       </div>
 
       <SaveButton state={state} disabled={!current || next.length < 12 || mismatch} />
+
+      <div className="border-t border-slate-200 pt-5 dark:border-slate-800">
+        <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Sessions</h2>
+        <p className="hint mb-3">Signs out every browser signed in to this account, including this one.</p>
+        <button
+          type="button"
+          className="btn-secondary"
+          onClick={async () => {
+            try {
+              await logoutEverywhere();
+            } finally {
+              setToken(null);
+              window.location.assign('/login');
+            }
+          }}
+        >
+          Sign out everywhere
+        </button>
+      </div>
     </form>
   );
 }

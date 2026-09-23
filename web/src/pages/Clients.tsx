@@ -6,6 +6,7 @@ import {
   errorMessage,
   getClients,
   getPsaClients,
+  getSuggestedDomains,
   getTenants,
   updateClient,
   type Client,
@@ -22,10 +23,20 @@ import {
 } from '../components/ui';
 import { TrashIcon } from '../components/Icons';
 import { formatRelative } from '../lib/format';
+import { useCan } from '../lib/session';
+
+/** Splits what someone typed or pasted into a clean list. */
+function splitList(text: string): string[] {
+  return text
+    .split(/[\s,;]+/)
+    .map((v) => v.trim())
+    .filter(Boolean);
+}
 
 export default function Clients() {
   const queryClient = useQueryClient();
   const toast = useToast();
+  const isAdmin = useCan('admin');
 
   const [showAdd, setShowAdd] = useState(false);
   const [editing, setEditing] = useState<Client | null>(null);
@@ -84,9 +95,11 @@ export default function Clients() {
         title="Clients"
         description="Swoop only reads tickets from clients you enable here. Everything else is skipped without being logged."
         actions={
-          <button onClick={() => setShowAdd(true)} className="btn-primary">
-            Add client
-          </button>
+          isAdmin ? (
+            <button onClick={() => setShowAdd(true)} className="btn-primary">
+              Add client
+            </button>
+          ) : null
         }
       />
 
@@ -145,6 +158,7 @@ export default function Clients() {
               <tr>
                 <th className="th">Client</th>
                 <th className="th">SuperOps company ID</th>
+                <th className="th">Recognised by</th>
                 <th className="th">Automation</th>
                 <th className="th text-right">Classified</th>
                 <th className="th">Last activity</th>
@@ -156,7 +170,7 @@ export default function Clients() {
                 <tr key={client.id} className="border-b border-slate-100 dark:border-slate-800/60">
                   <td className="td">
                     <button
-                      onClick={() => setEditing(client)}
+                      onClick={() => isAdmin && setEditing(client)}
                       className="font-medium text-slate-900 hover:text-swoop-600 dark:text-slate-100 dark:hover:text-swoop-400"
                     >
                       {client.name}
@@ -182,10 +196,27 @@ export default function Clients() {
                       </span>
                     )}
                   </td>
+                  <td className="td text-xs">
+                    {client.emailDomains.length > 0 ? (
+                      <span className="text-slate-600 dark:text-slate-300">{client.emailDomains.join(', ')}</span>
+                    ) : (
+                      <span className="text-amber-600 dark:text-amber-400" title="Without domains Swoop cannot spot a request from outside this client">
+                        No domains
+                      </span>
+                    )}
+                    {client.m365DefaultDomain && (
+                      <div className="mt-0.5 text-slate-400" title="Microsoft 365 tenant">
+                        M365: {client.m365DefaultDomain}
+                      </div>
+                    )}
+                    {client.vipEmails.length > 0 && (
+                      <div className="mt-0.5 text-slate-400">{client.vipEmails.length} VIP{client.vipEmails.length === 1 ? '' : 's'}</div>
+                    )}
+                  </td>
                   <td className="td">
                     <Toggle
                       checked={client.automationEnabled}
-                      disabled={toggle.isPending}
+                      disabled={toggle.isPending || !isAdmin}
                       label={client.automationEnabled ? 'Enabled' : 'Disabled'}
                       onChange={(enabled) => toggle.mutate({ id: client.id, enabled })}
                     />
@@ -195,6 +226,7 @@ export default function Clients() {
                     {client.lastActionAt ? formatRelative(client.lastActionAt) : 'never'}
                   </td>
                   <td className="td text-right">
+                    {isAdmin && (
                     <button
                       onClick={() => setPendingDelete(client)}
                       className="rounded p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950"
@@ -203,6 +235,7 @@ export default function Clients() {
                     >
                       <TrashIcon />
                     </button>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -212,8 +245,9 @@ export default function Clients() {
       </div>
 
       <p className="mt-4 text-xs text-slate-500 dark:text-slate-400">
-        <Badge tone="info">How matching works</Badge> Swoop matches a ticket to a client by SuperOps company ID
-        first, then by exact client name. The company ID is the reliable one — names get renamed.
+        <Badge tone="info">How matching works</Badge> Swoop matches a ticket to a client by SuperOps company ID,
+        then by exact client name, then by the requester's email domain. Domains also let Swoop notice a request
+        from one client about another client's user — a common social-engineering pattern — and escalate it.
       </p>
 
       <ConfirmDialog
@@ -248,7 +282,20 @@ function ClientForm({
   const [promptOverride, setPromptOverride] = useState(client?.systemPromptOverride ?? '');
   const [showPrompt, setShowPrompt] = useState(Boolean(client?.systemPromptOverride));
   const [enabled, setEnabled] = useState(client?.automationEnabled ?? false);
+  const [domains, setDomains] = useState((client?.emailDomains ?? []).join(', '));
+  const [m365Domain, setM365Domain] = useState(client?.m365DefaultDomain ?? '');
+  const [m365TenantId, setM365TenantId] = useState(client?.m365TenantId ?? '');
+  const [vips, setVips] = useState((client?.vipEmails ?? []).join('\n'));
   const [error, setError] = useState('');
+
+  // Domains already seen on this client's tickets — one click to add them.
+  const { data: suggested } = useQuery({
+    queryKey: ['suggested-domains', client?.id],
+    queryFn: () => getSuggestedDomains(client!.id).then((r) => r.data.suggestions),
+    enabled: Boolean(client),
+  });
+  const currentDomains = splitList(domains).map((d) => d.toLowerCase());
+  const suggestions = (suggested ?? []).filter((s) => !currentDomains.includes(s.domain));
 
   // Offered as a picker when the SuperOps schema exposes a client list, which
   // saves the operator hunting for a company ID. Falls back to typing.
@@ -275,6 +322,10 @@ function ClientForm({
             contextNotes: contextNotes.trim() || null,
             systemPromptOverride: promptOverride.trim() || null,
             automationEnabled: enabled,
+            emailDomains: splitList(domains),
+            m365DefaultDomain: m365Domain.trim() || null,
+            m365TenantId: m365TenantId.trim() || null,
+            vipEmails: splitList(vips),
           })
         : createClient({
             tenantId,
@@ -283,6 +334,10 @@ function ClientForm({
             contextNotes: contextNotes.trim() || undefined,
             systemPromptOverride: promptOverride.trim() || undefined,
             automationEnabled: enabled,
+            emailDomains: splitList(domains),
+            m365DefaultDomain: m365Domain.trim() || null,
+            m365TenantId: m365TenantId.trim() || null,
+            vipEmails: splitList(vips),
           }),
     onSuccess: onSaved,
     onError: (err) => setError(errorMessage(err, 'Could not save the client')),
@@ -369,6 +424,72 @@ function ClientForm({
             <p className="hint">Find it in the URL when you open the client in SuperOps.</p>
           </div>
         </div>
+
+        <fieldset className="rounded-lg border border-slate-200 p-4 dark:border-slate-800">
+          <legend className="px-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Recognition</legend>
+          <div className="space-y-4">
+            <div>
+              <label className="label">Email domains</label>
+              <input
+                value={domains}
+                onChange={(e) => setDomains(e.target.value)}
+                placeholder="acme.com, acme.co.uk"
+                className="input"
+              />
+              <p className="hint">
+                Every domain this client's staff send from. Tickets are matched on these when SuperOps has no
+                company, and a request that names a user on another client's domain is escalated.
+              </p>
+              {suggestions.length > 0 && (
+                <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
+                  <span className="text-slate-500">Seen on this client's tickets:</span>
+                  {suggestions.map((s) => (
+                    <button
+                      type="button"
+                      key={s.domain}
+                      onClick={() => setDomains(currentDomains.concat(s.domain).join(', '))}
+                      className="rounded-full bg-sheen-soft px-2 py-0.5 font-medium text-slate-700 hover:ring-1 hover:ring-swoop-400 dark:text-slate-200"
+                    >
+                      + {s.domain} <span className="text-slate-400">({s.tickets})</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <label className="label">Microsoft 365 default domain</label>
+                <input
+                  value={m365Domain}
+                  onChange={(e) => setM365Domain(e.target.value)}
+                  placeholder="acme.onmicrosoft.com"
+                  className="input font-mono"
+                />
+                <p className="hint">What CIPP calls the tenant filter. Needed for user lookups and plans.</p>
+              </div>
+              <div>
+                <label className="label">Microsoft 365 tenant ID</label>
+                <input
+                  value={m365TenantId}
+                  onChange={(e) => setM365TenantId(e.target.value)}
+                  placeholder="Optional GUID"
+                  className="input font-mono"
+                />
+              </div>
+            </div>
+            <div>
+              <label className="label">VIPs</label>
+              <textarea
+                value={vips}
+                onChange={(e) => setVips(e.target.value)}
+                rows={2}
+                placeholder="ceo@acme.com&#10;cfo@acme.com"
+                className="input font-mono text-xs"
+              />
+              <p className="hint">Tickets from these addresses are raised one priority level.</p>
+            </div>
+          </div>
+        </fieldset>
 
         <div>
           <label className="label">Client context for the AI (optional)</label>

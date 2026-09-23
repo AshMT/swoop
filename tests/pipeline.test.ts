@@ -164,6 +164,9 @@ describe('runTriage', () => {
     const { eq } = await import('drizzle-orm');
     const members = await db.select().from(actionLogs).where(eq(actionLogs.clusterId, third.cluster!.clusterId));
     expect(members.length).toBeGreaterThanOrEqual(2);
+    // The tickets that arrived first are raised to the incident's urgency too.
+    for (const member of members) expect(['P1', 'P2']).toContain(member.priority);
+    expect(members.every((m) => (m.signals ?? '').includes('incident_cluster'))).toBe(true);
   });
 
   it('shows reviewed tickets to the model as examples', async () => {

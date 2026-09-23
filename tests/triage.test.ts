@@ -346,3 +346,10 @@ describe('finaliseTriage', () => {
     expect(out.signals.find((s) => s.id === 'incident_cluster')?.label).toBe('Multi-client incident');
   });
 });
+
+describe('scoped outage language', () => {
+  it('reads "everyone in accounts" as a team, not the organisation', () => {
+    const result = signals('The printer is offline for everyone in accounts again');
+    expect(result.impactFloor).toBe('team');
+  });
+});

@@ -167,14 +167,18 @@ These need real SuperOps credentials and cannot be closed from a dev environment
 - `src/services/executor.ts`, dispatching on the action type
 - M365 actions go through [CIPP](https://cipp.app):
 
-| Action | CIPP endpoint |
-|---|---|
-| `password_reset` | `POST /api/ExecResetPass` |
-| `group_add` / `group_remove` | `POST /api/ExecAddMember` / `ExecRemoveMember` |
-| `license_assign` / `license_remove` | `POST /api/ExecAssignLicense` |
-| `account_disable` / `account_enable` | `POST /api/ExecDisableUser` / `ExecEnableUser` |
-| `mfa_reset` | `POST /api/ExecResetMFA` |
-| `mailbox_permission` | `POST /api/ExecMailboxPermission` |
+Checked against CIPP's own OpenAPI spec (`Config/openapi.json` in CIPP-API). Two names this plan originally used — `ExecAddMember`/`ExecRemoveMember` and `ExecEnableUser` — do not exist.
+
+| Action | CIPP endpoint | Notes |
+|---|---|---|
+| `password_reset` | `POST /api/ExecResetPass` | `tenantFilter`, `ID`, `displayName`, `MustChange` |
+| `mfa_reset` | `POST /api/ExecResetMFA` | `tenantFilter`, `ID` |
+| `group_add` / `group_remove` | `POST /api/EditGroup` | `groupId` object plus `AddMember` / `RemoveMember` arrays |
+| `license_assign` / `license_remove` | `POST /api/ExecBulkLicense` | Array body; `LicenseOperation` Add / Remove |
+| `account_disable` / `account_enable` | `POST /api/ExecDisableUser` | `Enable: false` / `true`; pair disable with `ExecRevokeSessions` |
+| `mailbox_permission` | `POST /api/ExecEditMailboxPermissions` | Rights as `[{ "value": "<mailbox>" }]` — a bare string silently does nothing |
+
+Swoop already builds these as execution plans (`src/services/approvals/plan.ts`) and shows them to approvers. Read-only lookups use `ListUsers` (`UserID` accepts a UPN), `ListUserGroups` and `ListMFAUsers` with `UseReportDB=true`.
 
 - Every execution is logged with the request, the response and the outcome
 - Rollback guidance recorded for reversible actions

@@ -162,7 +162,8 @@ function buildModel(classification: AiClassification, context: NoteContext): Not
     { label: 'Sensitivity', value: classification.sensitivity },
   );
   if (triage && triage.sentiment !== 'neutral') facts.push({ label: 'Tone', value: triage.sentiment });
-  if (classification.sensitivity === 'high') {
+  // Only a proposed change has anything to approve.
+  if (classification.sensitivity === 'high' && !isEscalation && !isFollowUp) {
     facts.push({
       label: 'Approval',
       value: 'Required regardless of confidence — flagged high sensitivity',

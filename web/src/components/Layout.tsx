@@ -1,27 +1,53 @@
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { getSystemStatus, setToken } from '../api';
+import { getQueueSummary, getSystemStatus, setToken, type Role } from '../api';
+import { roleAtLeast, useMe } from '../lib/session';
 import { applyTheme, readTheme, resolveTheme, watchSystemTheme, writeTheme, type Theme } from '../lib/theme';
 import { formatRelative } from '../lib/format';
 import {
+  ApprovalIcon,
   CalibrationIcon,
   ClientsIcon,
-  DashboardIcon,
+  IncidentIcon,
+  LogIcon,
   LogoutIcon,
   MoonIcon,
+  PeopleIcon,
+  QueueIcon,
   SettingsIcon,
   SunIcon,
   SwoopLogo,
 } from './Icons';
 import { Alert } from './ui';
 
-const NAV = [
-  { to: '/dashboard', label: 'Dashboard', Icon: DashboardIcon },
-  { to: '/calibration', label: 'Calibration', Icon: CalibrationIcon },
-  { to: '/clients', label: 'Clients', Icon: ClientsIcon },
-  { to: '/settings', label: 'Settings', Icon: SettingsIcon },
+type Badge = 'queue' | 'approvals' | 'incidents';
+
+const NAV: Array<{ to: string; label: string; Icon: (p: { className?: string }) => JSX.Element; min: Role; badge?: Badge }> = [
+  { to: '/queue', label: 'Triage queue', Icon: QueueIcon, min: 'viewer', badge: 'queue' },
+  { to: '/approvals', label: 'Approvals', Icon: ApprovalIcon, min: 'viewer', badge: 'approvals' },
+  { to: '/incidents', label: 'Incidents', Icon: IncidentIcon, min: 'viewer', badge: 'incidents' },
+  { to: '/log', label: 'Activity log', Icon: LogIcon, min: 'viewer' },
+  { to: '/calibration', label: 'Calibration', Icon: CalibrationIcon, min: 'viewer' },
+  { to: '/clients', label: 'Clients', Icon: ClientsIcon, min: 'viewer' },
+  { to: '/people', label: 'People', Icon: PeopleIcon, min: 'admin' },
+  { to: '/settings', label: 'Settings', Icon: SettingsIcon, min: 'viewer' },
 ];
+
+function useNavCounts(): Record<Badge, { count: number; urgent: boolean }> | null {
+  const { data } = useQuery({
+    queryKey: ['queue-summary'],
+    queryFn: () => getQueueSummary({ days: 7 }).then((r) => r.data),
+    refetchInterval: 30_000,
+    retry: false,
+  });
+  if (!data) return null;
+  return {
+    queue: { count: data.priorities.P1 + data.priorities.P2, urgent: data.priorities.P1 > 0 },
+    approvals: { count: data.pendingApprovals, urgent: false },
+    incidents: { count: data.openIncidents, urgent: data.openIncidents > 0 },
+  };
+}
 
 function ThemeToggle() {
   const [theme, setTheme] = useState<Theme>(readTheme);
@@ -42,7 +68,7 @@ function ThemeToggle() {
         setTheme(next);
         writeTheme(next);
       }}
-      className="btn-ghost w-full justify-start"
+      className="btn w-full justify-start text-slate-400 hover:bg-white/[0.04] hover:text-slate-100"
       aria-label={`Switch to ${next} theme`}
       title={`Switch to ${next} theme`}
     >
@@ -103,7 +129,7 @@ function PollStatusFooter() {
   const tenant = data?.tenants[0];
 
   return (
-    <div className="border-t border-slate-700/60 px-4 py-3 text-xs text-slate-400">
+    <div className="border-t border-white/10 px-4 py-3 text-xs text-slate-400">
       <div className="flex items-center gap-2">
         <span
           className={`h-1.5 w-1.5 rounded-full ${
@@ -135,6 +161,9 @@ function PollStatusFooter() {
 }
 
 export default function Layout() {
+  const { data: me } = useMe();
+  const counts = useNavCounts();
+
   const handleLogout = () => {
     setToken(null);
     window.location.assign('/login');
@@ -142,37 +171,58 @@ export default function Layout() {
 
   return (
     <div className="flex min-h-screen bg-slate-50 dark:bg-slate-950">
-      <aside className="flex w-56 shrink-0 flex-col bg-slate-900 text-slate-100">
-        <div className="flex items-center gap-2.5 border-b border-slate-700/60 px-4 py-4">
-          <SwoopLogo className="h-8 w-8 text-swoop-600" />
+      {/* Ink-black, like the bird, with the sheen reserved for what is active. */}
+      <aside className="sticky top-0 flex h-screen w-60 shrink-0 flex-col bg-slate-950 text-slate-100">
+        <div className="flex items-center gap-2.5 px-4 pb-4 pt-5">
+          <SwoopLogo className="h-9 w-9 shrink-0 drop-shadow" />
           <div className="min-w-0">
-            <div className="text-base font-semibold leading-tight">Swoop</div>
-            <div className="truncate text-xs text-slate-400">AI ticket triage</div>
+            <div className="text-lg font-semibold leading-tight tracking-tight">Swoop</div>
+            <div className="truncate text-xs text-slate-400">Triage that swoops first</div>
           </div>
         </div>
+        <div className="mx-4 h-px bg-sheen opacity-40" />
 
-        <nav className="flex-1 space-y-1 px-2 py-3">
-          {NAV.map(({ to, label, Icon }) => (
-            <NavLink
-              key={to}
-              to={to}
-              className={({ isActive }) =>
-                `flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
-                  isActive
-                    ? 'bg-swoop-600 text-white'
-                    : 'text-slate-300 hover:bg-slate-800 hover:text-white'
-                }`
-              }
-            >
-              <Icon />
-              <span>{label}</span>
-            </NavLink>
-          ))}
+        <nav className="flex-1 space-y-0.5 overflow-y-auto px-2 py-3">
+          {NAV.filter((item) => roleAtLeast(me?.role ?? 'viewer', item.min)).map(({ to, label, Icon, badge }) => {
+            const count = badge && counts ? counts[badge] : null;
+            return (
+              <NavLink
+                key={to}
+                to={to}
+                className={({ isActive }) =>
+                  `group flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                    isActive
+                      ? 'sheen-edge bg-white/[0.07] text-white'
+                      : 'text-slate-400 hover:bg-white/[0.04] hover:text-slate-100'
+                  }`
+                }
+              >
+                <Icon />
+                <span className="flex-1">{label}</span>
+                {count && count.count > 0 && (
+                  <span
+                    className={`tnum rounded-full px-1.5 text-[11px] font-semibold ${
+                      count.urgent ? 'bg-eye-600 text-white' : 'bg-white/10 text-slate-200'
+                    }`}
+                  >
+                    {count.count}
+                  </span>
+                )}
+              </NavLink>
+            );
+          })}
         </nav>
+
+        {me && (
+          <div className="mx-2 mb-2 rounded-lg bg-white/[0.04] px-3 py-2">
+            <div className="truncate text-sm font-medium text-slate-100">{me.displayName || me.email}</div>
+            <div className="truncate text-xs capitalize text-slate-400">{me.role ?? 'viewer'}</div>
+          </div>
+        )}
 
         <div className="space-y-1 px-2 pb-2">
           <ThemeToggle />
-          <button onClick={handleLogout} className="btn-ghost w-full justify-start">
+          <button onClick={handleLogout} className="btn w-full justify-start text-slate-400 hover:bg-white/[0.04] hover:text-slate-100">
             <LogoutIcon />
             <span>Sign out</span>
           </button>

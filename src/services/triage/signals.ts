@@ -76,6 +76,9 @@ const OUTAGE_WORD =
   /\b(down|offline|outage|not working|isn'?t working|stopped working|can'?t|cannot|unable|no (internet|email|access|connection)|lost (internet|connection|access))\b/i;
 /** "Nobody can get on the internet" is an outage with no outage word in it. */
 const NOBODY_CAN = /\b(no ?one|nobody|none of us)\b.{0,40}?\b(can|could|is able|are able)\b/i;
+/** "Everyone in accounts" is a team, however universal "everyone" sounds. */
+const SCOPED_EVERYONE =
+  /\b(every(one|body)|all (of )?(the )?(staff|users)|no ?one|nobody) (in|on|from|at) (the |our |my )?(\w+ ){0,2}(team|department|dept|floor|accounts|finance|sales|marketing|reception|warehouse|hr|payroll|ops|operations|design|support|branch|room)\b/i;
 const TEAM_WIDE =
   /\b((the |our |whole )?(accounts|finance|sales|marketing|reception|warehouse|hr|payroll|ops|operations|design|support) (team|department|dept)|several (people|users|staff)|a few (people|users|of us)|multiple (people|users|staff))\b/i;
 
@@ -122,7 +125,8 @@ export function detectSignals(input: SignalInput): SignalAssessment {
   }
 
   let impactFloor: Impact | null = null;
-  const orgWide = ORG_WIDE.exec(text);
+  const scoped = SCOPED_EVERYONE.exec(text);
+  const orgWide = scoped ? null : ORG_WIDE.exec(text);
   const outage = OUTAGE_WORD.exec(text) ?? NOBODY_CAN.exec(text);
   if (orgWide && outage) {
     impactFloor = 'organisation';
@@ -133,7 +137,7 @@ export function detectSignals(input: SignalInput): SignalAssessment {
       severity: 'warn',
     });
   } else {
-    const team = TEAM_WIDE.exec(text);
+    const team = scoped ?? TEAM_WIDE.exec(text);
     if (team && outage) {
       impactFloor = 'team';
       signals.push({

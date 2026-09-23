@@ -18,7 +18,7 @@ export default function Login() {
       setToken(res.data.token);
       // A full navigation rather than a router push: it re-runs the app
       // bootstrap so the token is picked up everywhere at once.
-      window.location.assign('/dashboard');
+      window.location.assign('/queue');
     } catch (err) {
       setError(errorMessage(err, 'Sign-in failed'));
       setLoading(false);
@@ -26,12 +26,12 @@ export default function Login() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-50 p-4 dark:bg-slate-950">
+    <div className="flex min-h-screen items-center justify-center bg-slate-50 bg-[radial-gradient(ellipse_at_top,rgba(47,111,224,0.10),transparent_60%)] p-4 dark:bg-slate-950">
       <div className="w-full max-w-sm">
         <div className="mb-8 flex flex-col items-center text-center">
-          <SwoopLogo className="h-12 w-12 text-swoop-600" />
+          <SwoopLogo className="h-14 w-14 drop-shadow-md" />
           <h1 className="mt-3 text-2xl font-semibold tracking-tight text-slate-900 dark:text-slate-50">Swoop</h1>
-          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">AI ticket triage for MSPs</p>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Triage that swoops first — for MSPs on SuperOps</p>
         </div>
 
         <div className="card p-6">
@@ -83,8 +83,8 @@ export default function Login() {
         </div>
 
         <p className="mt-6 text-center text-xs text-slate-400 dark:text-slate-500">
-          Self-hosted. Your tickets and credentials never leave your infrastructure, except for the calls to
-          the AI provider you configured.
+          Self-hosted. Your tickets and credentials stay on your infrastructure, apart from the calls to the AI
+          provider you chose and, if you connect it, your own CIPP.
         </p>
       </div>
     </div>

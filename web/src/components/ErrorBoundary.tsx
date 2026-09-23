@@ -66,8 +66,8 @@ export default class ErrorBoundary extends Component<Props, State> {
             <button onClick={() => window.location.reload()} className="btn-secondary">
               Reload the page
             </button>
-            <a href="/dashboard" className="btn-ghost">
-              Back to the dashboard
+            <a href="/queue" className="btn-ghost">
+              Back to the queue
             </a>
           </div>
 
