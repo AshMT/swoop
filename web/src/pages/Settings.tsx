@@ -301,6 +301,19 @@ function ConnectionResult({ result }: { result: ConnectionTestResult }) {
             <li>
               Ticket body:{' '}
               {bodySource(caps) ? <code>{bodySource(caps)}</code> : <span className="font-medium">not found</span>}
+              {result.bodyCheck && 'characters' in result.bodyCheck && (
+                <span>
+                  {' '}
+                  — read {result.bodyCheck.characters} characters from ticket {result.bodyCheck.ticket}: “{result.bodyCheck.preview}
+                  {result.bodyCheck.characters > result.bodyCheck.preview.length ? '…' : ''}”
+                </span>
+              )}
+              {result.bodyCheck && 'error' in result.bodyCheck && (
+                <span className="font-medium">
+                  {' '}
+                  — but reading it{result.bodyCheck.ticket ? ` from ticket ${result.bodyCheck.ticket}` : ''} failed: {result.bodyCheck.error}
+                </span>
+              )}
             </li>
             <li>
               Note mutation:{' '}

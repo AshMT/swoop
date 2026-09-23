@@ -25,6 +25,8 @@ export interface ConnectionTestResult {
   error?: string;
   /** Present when the probe ran, so the UI can show what was discovered. */
   capabilities?: PsaCapabilities;
+  /** The body read from the newest ticket, proving the body source works on real data. */
+  bodyCheck?: { ticket: string; characters: number; preview: string } | { ticket: string | null; error: string };
 }
 
 /** A client (company) as the PSA knows it, for the allowlist picker. */

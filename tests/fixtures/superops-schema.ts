@@ -61,7 +61,7 @@ export interface SchemaOptions {
    * 'list' returns [TicketConversation] directly, 'wrapped' returns
    * { conversations { ... } }, 'none' omits it.
    */
-  conversations?: 'list' | 'wrapped' | 'none';
+  conversations?: 'list' | 'wrapped' | 'none' | 'deep' | 'opaque' | 'textless';
   /** Put the body inside an object, as description { content }. */
   bodyObject?: boolean;
 }
@@ -234,11 +234,29 @@ export function buildFakeSchema(options: SchemaOptions = {}): FakeSchema {
   }
 
   if (conversations !== 'none') {
+    // 'deep' is the fully wrapped [TicketConversation!]! a strict schema returns;
+    // 'opaque' names an entry type introspection cannot read; 'textless' has
+    // entries with no text field.
+    const entry =
+      conversations === 'opaque' ? 'HiddenConversation' : conversations === 'textless' ? 'BareConversation' : 'TicketConversation';
     queryFields.push({
       name: 'getTicketConversationList',
-      type: conversations === 'list' ? list(object('TicketConversation')) : object('TicketConversationList'),
+      type:
+        conversations === 'wrapped'
+          ? object('TicketConversationList')
+          : conversations === 'deep'
+            ? nonNull(list(nonNull(object(entry))))
+            : list(object(entry)),
       args: [{ name: 'input', type: nonNull(input('TicketIdentifierInput')) }],
     });
+    types.BareConversation = {
+      name: 'BareConversation',
+      kind: 'OBJECT',
+      fields: [
+        { name: 'conversationId', type: scalar('ID') },
+        { name: 'attachments', type: list(object('User')) },
+      ],
+    };
   }
 
   const mutationFields: FakeField[] = [];

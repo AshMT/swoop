@@ -34,7 +34,19 @@ export const TYPE_REF_FRAGMENT = `
       ofType {
         kind
         name
-        ofType { kind name }
+        ofType {
+          kind
+          name
+          ofType {
+            kind
+            name
+            ofType {
+              kind
+              name
+              ofType { kind name }
+            }
+          }
+        }
       }
     }
   }

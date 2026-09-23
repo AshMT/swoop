@@ -194,17 +194,35 @@ export class SuperOpsClient implements PSAClient {
     const caps = await this.ensureCapabilities();
     if (ticket.body) return ticket;
     try {
-      const body =
-        caps.bodyField && caps.detailQuery && caps.detailArgName
-          ? await this.fetchBodyField(caps, ticket.ticketId)
-          : caps.conversationQuery
-            ? await this.fetchFirstConversation(caps, ticket.ticketId)
-            : null;
+      const body = await this.fetchBody(caps, ticket.ticketId);
       if (body) return { ...ticket, body };
     } catch (err) {
       log.warn(`Could not fetch the body for ticket ${ticket.ticketId}: ${describeError(err)}`);
     }
     return ticket;
+  }
+
+  private async fetchBody(caps: PsaCapabilities, ticketId: string): Promise<string | null> {
+    if (caps.bodyField && caps.detailQuery && caps.detailArgName) return this.fetchBodyField(caps, ticketId);
+    if (caps.conversationQuery) return this.fetchFirstConversation(caps, ticketId);
+    return null;
+  }
+
+  /** Reads the newest ticket's body, so the connection test proves it on real data. */
+  private async checkBody(caps: PsaCapabilities): Promise<ConnectionTestResult['bodyCheck']> {
+    if (!caps.listQuery || !caps.listResultField || !caps.listArgName) return undefined;
+    if (!(caps.bodyField || caps.conversationQuery)) return undefined;
+    let label: string | null = null;
+    try {
+      const [ticket] = await this.fetchTicketPage(caps, 1);
+      if (!ticket) return undefined;
+      label = ticket.displayId ? `#${ticket.displayId}` : ticket.ticketId;
+      const body = await this.fetchBody(caps, ticket.ticketId);
+      if (!body) return { ticket: label, error: 'The query ran but returned no text for this ticket.' };
+      return { ticket: label, characters: body.length, preview: body.slice(0, 160) };
+    } catch (err) {
+      return { ticket: label, error: describeError(err) };
+    }
   }
 
   private async fetchBodyField(caps: PsaCapabilities, ticketId: string): Promise<string | null> {
@@ -381,7 +399,8 @@ export class SuperOpsClient implements PSAClient {
   async testConnection(): Promise<ConnectionTestResult> {
     try {
       const capabilities = await this.ensureCapabilities(true);
-      return { ok: true, endpoint: this.endpoint, capabilities };
+      const bodyCheck = await this.checkBody(capabilities);
+      return { ok: true, endpoint: this.endpoint, capabilities, ...(bodyCheck ? { bodyCheck } : {}) };
     } catch (err) {
       return { ok: false, endpoint: this.endpoint, error: describeError(err) };
     }
