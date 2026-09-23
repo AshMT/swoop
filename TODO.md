@@ -1,6 +1,6 @@
 # Swoop — TODO
 
-> Last updated: 2026-09-22
+> Last updated: 2026-09-23
 > Work from the top.
 
 ---
@@ -28,12 +28,24 @@ Then, in order:
   - Any warnings listed.
 - [ ] Turn on **Preview mode** (Settings → Behaviour) so nothing is written into real client tickets yet.
 - [ ] Enable one client, with its SuperOps company ID filled in.
-- [ ] Press **Poll now**. Confirm tickets appear with a non-empty body in the expanded row.
+- [ ] Press **Poll now**. Confirm tickets appear in the **Triage queue** with a summary, and that the ticket page shows the body.
 - [ ] Turn Preview mode off and confirm a note lands on the right ticket, marked private.
+
+## 1a. Recognition, people and CIPP
+
+- [ ] On **Clients**, add each client's email domains (take the suggestions Swoop offers from past tickets), its Microsoft 365 default domain, and any VIPs.
+- [ ] Under **Settings → Triage rules**, set the timezone and business hours. Check the default queue names match what your desk calls them.
+- [ ] Invite at least one other person as an **approver** from **People**, so dual approval has someone to ask.
+- [ ] Optional: connect CIPP under **Settings → CIPP** and press **Test connection**. Then open a proposed password reset and check the *User in Microsoft 365* panel matches reality. Only GET calls are made.
+- [ ] Add each client's **authorised contacts** — the people allowed to ask for changes to other people's accounts.
+- [ ] Write the first **runbooks** on the Knowledge page: who approves what at each client, and the exact group and licence names.
+- [ ] Optional: turn on the **agent** (Settings → Agent) with a tool-calling model, and read a few investigations before trusting them.
+- [ ] Later, and only once calibration holds: **Execution** in dry-run mode first, then one action for one client.
 
 ## 2. Calibrate
 
-- [ ] Review every classification — tick or cross, and on a cross pick what it should have been.
+- [ ] Review every triage — on the ticket page, correct only what was wrong: the action, the category or the priority.
+- [ ] Watch **priority under-calls** on the Calibration page. That is the mistake that matters most.
 - [ ] At 20 reviews, read the **Calibration** page.
 - [ ] Work the confusion table. Each repeated pair is a prompt fix: add the distinction under Settings → Prompt, then **Re-run classifier** on a ticket you know the answer to.
 - [ ] Check confidence separation. If confidence barely differs between right and wrong answers, lower the threshold and rely on the sensitivity flag instead — a high threshold that escalates correct answers is pure cost.
@@ -57,6 +69,23 @@ The image builds and pushes but is private, so `docker pull ghcr.io/ashmt/swoop:
 - [x] **Per-ticket concurrency.** A bounded worker pool, 1 to 8, set per tenant. Defaults to 1 so an upgrade does not change how hard an existing install hits its provider.
 - [x] **Note format.** Plain, Markdown or HTML, chosen per tenant and defaulting to plain. Settings renders a worked example of each so you can paste one into a test ticket and see which your PSA renders, rather than guessing.
 - [x] **Per-client prompt overrides.** A client override replaces the tenant prompt for that client's tickets, and carries its own prompt fingerprint so its accuracy is not averaged in with everyone else's.
+- [x] **Full triage, not just an action.** Category, impact, urgency, computed priority, queue routing, summary, suggested reply and next steps.
+- [x] **Deterministic signals.** Security and fraud patterns, outage language, VIPs, out-of-hours, repeat requesters. They raise, never lower.
+- [x] **Tenant recognition.** Client domains and M365 tenant; matching by requester domain; cross-client and personal-address requests caught.
+- [x] **Duplicates, related tickets, reviewed examples in the prompt, and incident clustering.**
+- [x] **People, roles, invitations, real session revocation, audit log.**
+- [x] **Approvals.** One or two approvers, expiry, optional auto-approval, decision notes, execution plans built from CIPP's real API.
+- [x] **Read-only CIPP lookups** feeding plan prechecks.
+- [ ] **Confirm SuperOps accepts the longer note.** The triage note is several times the size of the old one. If SuperOps truncates notes, trim what the note includes in `src/services/note-format.ts`.
+- [ ] **Write priority back to SuperOps.** Needs the real `updateTicket` mutation shape and the tenant's priority names; the probe does not look for it yet.
+- [x] **Execution.** Off by default; per-action and per-client allowlists; dry run first; resolve against the live tenant and refuse anything ambiguous; send once, never retry a write; read the tenant back; one live run per proposal; unknown outcomes block retries until a person records them; one-time encrypted password reveal; install-wide kill switch.
+- [x] **Investigation agent.** Read-only tools confined to the ticket's client; recommendations and findings checked against what the lookups returned.
+- [x] **Knowledge.** Runbooks per client or general, cited on tickets; SuperOps KB sync when the schema exposes one.
+- [x] **Identity checks.** Authorised contacts per client; approvers record how they verified the requester for identity-sensitive changes.
+- [ ] **Execution against a real CIPP.** Run dry runs for each action against a test tenant, then one live group add, and compare what CIPP returns with the fake in `tests/helpers/fake-cipp.ts` — CIPP's response wording changes between releases.
+- [ ] **Confirm the SuperOps KB query.** The probe looks for a knowledge base list query; check Settings → Diagnostics on a real instance and adjust the candidates in `src/services/psa/capabilities.ts` if it finds none.
+- [ ] **Mailbox permissions.** Plan-only until Swoop can read Exchange permissions back after a change.
+- [ ] **Agent model choice.** Try the investigation with the models you actually run; small local models may need `autoRun: manual`.
 - [ ] **Confirm which note format SuperOps renders.** The mechanism is built; the remaining step is a real ticket. Paste each preview from Settings → Behaviour into a test ticket and set the one that renders.
 - [x] **Prompt version on each row.** Each classification is stamped with a fingerprint of the prompt-and-model combination, and the Calibration page scopes to one version and warns when the window spans several.
 - [x] **Accuracy trend.** Daily agreement rate charted against the 90% target and 85% floor.

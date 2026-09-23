@@ -224,7 +224,7 @@ export default function Dashboard() {
   if (!tenant) {
     return (
       <div>
-        <PageHeader title="Dashboard" />
+        <PageHeader title="Activity log" />
         <div className="card">
           <EmptyState
             title="No SuperOps connection yet"
@@ -238,7 +238,7 @@ export default function Dashboard() {
   return (
     <div>
       <PageHeader
-        title="Dashboard"
+        title="Activity log"
         description={
           tenant.dryRun
             ? 'Preview mode — tickets are classified and logged, but no notes are written back to SuperOps.'

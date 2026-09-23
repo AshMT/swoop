@@ -19,6 +19,14 @@ function response(overrides: Record<string, unknown> = {}): string {
     follow_up_question: null,
     escalation_reason: null,
     proposed_psa_note: 'Reset the password for sarah@acme.com.',
+    category: 'identity_access',
+    subcategory: 'Account lockout',
+    impact: 'individual',
+    urgency: 'blocking',
+    summary: 'Sarah is locked out.',
+    sentiment: 'neutral',
+    first_response: 'We are resetting it now.',
+    next_steps: ['Verify the requester', 'Reset the password'],
     ...overrides,
   });
 }

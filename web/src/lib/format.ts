@@ -34,6 +34,16 @@ export function formatRelative(unixSeconds: number | null | undefined): string {
   return formatDate(unixSeconds);
 }
 
+/** "in 3h" — for deadlines such as an approval's expiry. */
+export function formatUntil(unixSeconds: number | null | undefined): string {
+  if (!unixSeconds) return 'never';
+  const seconds = unixSeconds - Math.floor(Date.now() / 1000);
+  if (seconds <= 0) return 'now';
+  if (seconds < 3600) return `in ${Math.max(1, Math.round(seconds / 60))}m`;
+  if (seconds < 86400 * 2) return `in ${Math.round(seconds / 3600)}h`;
+  return `in ${Math.round(seconds / 86400)}d`;
+}
+
 export function formatDuration(ms: number | null | undefined): string {
   if (ms === null || ms === undefined || !Number.isFinite(ms)) return '—';
   if (ms < 1000) return `${Math.round(ms)}ms`;
@@ -54,7 +64,7 @@ export function humanClassification(id: string | null | undefined): string {
     account_disable: 'Disable account',
     account_enable: 'Enable account',
     mailbox_permission: 'Mailbox permission',
-    ESCALATE: 'Escalate',
+    ESCALATE: 'For a technician',
     FOLLOW_UP: 'Needs follow-up',
   };
   return labels[id] ?? id.replace(/_/g, ' ');
@@ -67,9 +77,13 @@ export interface Entities {
   license_sku?: string | null;
 }
 
-/** Entities are stored as a JSON string; never let a bad row break the table. */
-export function parseEntities(raw: string | null | undefined): Entities {
+/**
+ * Entities arrive parsed from newer API responses and as a JSON string from
+ * older ones; never let a bad row break the table.
+ */
+export function parseEntities(raw: string | Entities | null | undefined): Entities {
   if (!raw) return {};
+  if (typeof raw === 'object') return raw;
   try {
     const parsed = JSON.parse(raw) as unknown;
     return parsed && typeof parsed === 'object' ? (parsed as Entities) : {};

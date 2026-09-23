@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { getCalibration, getClients, getTenants } from '../api';
+import { getCalibration, getClients, getTenants, type CalibrationReport } from '../api';
 import { Alert, ClassificationBadge, EmptyState, LoadingState, PageHeader, StatCard } from '../components/ui';
 import { formatDuration, formatPercent, formatRelative, humanClassification } from '../lib/format';
+import { categoryLabel, useVocabulary } from '../lib/session';
 
 /** Reference lines on the trend chart, as a percentage of its height. */
 const AGREEMENT_TARGET_PCT = 90;
@@ -22,7 +23,7 @@ const READINESS: Record<
   'insufficient-data': {
     tone: 'info',
     title: 'Not enough reviews yet',
-    body: 'Mark classifications correct or incorrect on the Dashboard. Until there are at least 20 reviews, the agreement rate moves too much to mean anything.',
+    body: 'Mark triage right or wrong on the ticket page or the activity log. Until there are at least 20 reviews, the agreement rate moves too much to mean anything.',
   },
   'below-floor': {
     tone: 'danger',
@@ -308,6 +309,8 @@ export default function Calibration() {
           )}
         </div>
 
+        {report.dimensions && <DimensionPanel dimensions={report.dimensions} />}
+
         {/* ─── Confidence calibration ───────────────────────────────────────── */}
         <div className="card p-4">
           <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Is confidence meaningful?</h2>
@@ -464,6 +467,66 @@ function ConfidenceRow({
       <div className="h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700">
         <div className={`h-full rounded-full ${colour}`} style={{ width: `${(value ?? 0) * 100}%` }} />
       </div>
+    </div>
+  );
+}
+
+/**
+ * Category and priority accuracy, scored on their own. The action can be
+ * right at the wrong urgency, and an under-called priority is the mistake
+ * that costs a client an hour of downtime.
+ */
+function DimensionPanel({ dimensions }: { dimensions: NonNullable<CalibrationReport['dimensions']> }) {
+  const { data: vocabulary } = useVocabulary();
+  const { category, priority } = dimensions;
+  const misses = priority.tooHigh + priority.tooLow;
+  return (
+    <div className="card p-4 lg:col-span-2">
+      <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Beyond the action</h2>
+      <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+        How often the category and priority matched what the technician said. Scored separately from the action.
+      </p>
+      <div className="mt-4 grid gap-4 sm:grid-cols-3">
+        <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-800/50">
+          <div className="tnum text-2xl font-semibold">{formatPercent(category.agreement)}</div>
+          <div className="text-xs text-slate-500">Category right · {category.reviewed} reviewed</div>
+        </div>
+        <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-800/50">
+          <div className="tnum text-2xl font-semibold">{formatPercent(priority.agreement)}</div>
+          <div className="text-xs text-slate-500">Priority right · {priority.reviewed} reviewed</div>
+        </div>
+        <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-800/50">
+          {misses === 0 ? (
+            <div className="text-sm text-slate-500">No priority corrections yet.</div>
+          ) : (
+            <>
+              <div className="flex h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700">
+                <div className="bg-eye-500" style={{ width: `${(priority.tooLow / misses) * 100}%` }} />
+                <div className="bg-amber-400" style={{ width: `${(priority.tooHigh / misses) * 100}%` }} />
+              </div>
+              <div className="mt-2 text-xs text-slate-600 dark:text-slate-300">
+                <span className="font-medium text-eye-600 dark:text-eye-400">{priority.tooLow} under-called</span> ·{' '}
+                <span className="font-medium text-amber-600 dark:text-amber-400">{priority.tooHigh} over-called</span>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+      {category.confusion.length > 0 && (
+        <div className="mt-4">
+          <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Category mix-ups</h3>
+          <ul className="space-y-1 text-sm">
+            {category.confusion.slice(0, 6).map((cell) => (
+              <li key={`${cell.predicted}-${cell.actual}`} className="flex items-center gap-2">
+                <span className="text-slate-700 dark:text-slate-300">{categoryLabel(vocabulary, cell.predicted)}</span>
+                <span className="text-slate-400">→</span>
+                <span className="font-medium text-slate-900 dark:text-slate-100">{categoryLabel(vocabulary, cell.actual)}</span>
+                <span className="tnum ml-auto text-xs text-slate-500">×{cell.count}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }

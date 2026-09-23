@@ -5,10 +5,50 @@ export const users = sqliteTable('users', {
   id: text('id').primaryKey(),
   email: text('email').unique().notNull(),
   passwordHash: text('password_hash').notNull(),
+  /** 'admin' | 'approver' | 'reviewer' | 'viewer' — see domain/roles.ts. */
   role: text('role').default('admin'),
+  displayName: text('display_name'),
+  disabled: integer('disabled', { mode: 'boolean' }).default(false),
+  /** Bumped to revoke every token issued before the bump. */
+  tokenVersion: integer('token_version').default(0),
+  invitedBy: text('invited_by'),
   createdAt: integer('created_at').default(sql`(unixepoch())`),
   lastLoginAt: integer('last_login_at'),
 });
+
+export const invites = sqliteTable('invites', {
+  id: text('id').primaryKey(),
+  email: text('email').notNull(),
+  role: text('role').notNull(),
+  /** SHA-256 of the one-time token; the token itself is never stored. */
+  tokenHash: text('token_hash').notNull().unique(),
+  createdBy: text('created_by'),
+  expiresAt: integer('expires_at').notNull(),
+  acceptedAt: integer('accepted_at'),
+  revokedAt: integer('revoked_at'),
+  createdAt: integer('created_at').default(sql`(unixepoch())`),
+});
+
+export const auditLog = sqliteTable(
+  'audit_log',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id'),
+    userEmail: text('user_email'),
+    action: text('action').notNull(),
+    targetType: text('target_type'),
+    targetId: text('target_id'),
+    tenantId: text('tenant_id'),
+    /** JSON detail — never secrets. */
+    detail: text('detail'),
+    ip: text('ip'),
+    createdAt: integer('created_at').default(sql`(unixepoch())`),
+  },
+  (table) => ({
+    createdIdx: index('audit_log_created_idx').on(table.createdAt),
+    targetIdx: index('audit_log_target_idx').on(table.targetType, table.targetId),
+  }),
+);
 
 export const tenants = sqliteTable('tenants', {
   id: text('id').primaryKey(),
@@ -41,6 +81,24 @@ export const tenants = sqliteTable('tenants', {
    * the bulk of the storage and the least useful to keep.
    */
   logRetentionDays: integer('log_retention_days').default(0),
+  /** JSON, see services/triage/settings.ts. */
+  triageSettings: text('triage_settings'),
+  /** JSON, see services/approvals/policy.ts. */
+  approvalPolicy: text('approval_policy'),
+
+  // ─── CIPP, for read-only lookups of the user a ticket is about ─────────────
+  cippEnabled: integer('cipp_enabled', { mode: 'boolean' }).default(false),
+  cippApiUrl: text('cipp_api_url'),
+  /** The MSP's own Entra tenant, where the CIPP-API app registration lives. */
+  cippTenantId: text('cipp_tenant_id'),
+  cippClientId: text('cipp_client_id'),
+  /** Encrypted at rest like the other credentials. */
+  cippClientSecret: text('cipp_client_secret'),
+  /** JSON, see services/agent/settings.ts. */
+  agentSettings: text('agent_settings'),
+  /** JSON, see services/execution/policy.ts. Execution is off unless this says otherwise. */
+  executionPolicy: text('execution_policy'),
+  kbLastSyncedAt: integer('kb_last_synced_at'),
 
   // ─── Discovered SuperOps schema (see services/psa/schema-probe.ts) ──────────
   psaCapabilities: text('psa_capabilities'),
@@ -69,6 +127,16 @@ export const clients = sqliteTable('clients', {
    * whose ticket mix differs enough that shared wording cannot serve both.
    */
   systemPromptOverride: text('system_prompt_override'),
+  /** JSON array of email domains that belong to this client. */
+  emailDomains: text('email_domains'),
+  /** The client's Microsoft 365 tenant, as a GUID. */
+  m365TenantId: text('m365_tenant_id'),
+  /** e.g. contoso.onmicrosoft.com — what CIPP calls the tenantFilter. */
+  m365DefaultDomain: text('m365_default_domain'),
+  /** JSON array of addresses whose tickets get a priority bump. */
+  vipEmails: text('vip_emails'),
+  /** JSON array of addresses allowed to request changes for the company. */
+  authorisedContacts: text('authorised_contacts'),
   createdAt: integer('created_at').default(sql`(unixepoch())`),
 });
 
@@ -122,6 +190,60 @@ export const actionLogs = sqliteTable(
     reviewNote: text('review_note'),
     reviewedBy: text('reviewed_by'),
     reviewedAt: integer('reviewed_at'),
+    reviewCorrectCategory: text('review_correct_category'),
+    reviewCorrectPriority: text('review_correct_priority'),
+
+    // ─── Triage verdict ───────────────────────────────────────────────────────
+    category: text('category'),
+    subcategory: text('subcategory'),
+    impact: text('impact'),
+    urgency: text('urgency'),
+    /** P1–P4, computed from impact × urgency then adjusted by signals. */
+    priority: text('priority'),
+    summary: text('summary'),
+    sentiment: text('sentiment'),
+    suggestedQueue: text('suggested_queue'),
+    firstResponse: text('first_response'),
+    /** JSON string[] of suggested technician steps. */
+    nextSteps: text('next_steps'),
+    /** JSON TriageSignal[] — the deterministic checks that fired. */
+    signals: text('signals'),
+    triageVersion: integer('triage_version'),
+
+    // ─── Tenant recognition ───────────────────────────────────────────────────
+    /** 'company_id' | 'company_name' | 'email_domain' */
+    matchMethod: text('match_method'),
+    requesterDomain: text('requester_domain'),
+    crossTenant: integer('cross_tenant', { mode: 'boolean' }).default(false),
+    /** JSON TenancyAssessment. */
+    tenancy: text('tenancy'),
+
+    // ─── Similarity ───────────────────────────────────────────────────────────
+    duplicateOfLogId: text('duplicate_of_log_id'),
+    /** JSON SimilarTicket[]. */
+    similar: text('similar'),
+    clusterId: text('cluster_id'),
+
+    // ─── Approval ─────────────────────────────────────────────────────────────
+    /** 'not_required' | 'pending' | 'approved' | 'rejected' | 'auto_approved' | 'expired' | 'superseded' */
+    approvalState: text('approval_state'),
+    approvalsRequired: integer('approvals_required').default(0),
+    /** Why the policy asked for this many approvals. */
+    approvalReason: text('approval_reason'),
+    approvalExpiresAt: integer('approval_expires_at'),
+    /** JSON ExecutionPlan — what would run, never run by Swoop today. */
+    executionPlan: text('execution_plan'),
+    /** Set when a reclassification replaces this row. */
+    supersededBy: text('superseded_by'),
+
+    /** JSON UserEnrichment from CIPP, when configured. */
+    enrichment: text('enrichment'),
+    /** JSON Investigation — what the agent looked up and concluded. */
+    investigation: text('investigation'),
+    /** JSON KbRef[] — runbooks relevant to this ticket. */
+    kbRefs: text('kb_refs'),
+    /** 'dry_run_ok' | 'running' | 'succeeded' | 'noop' | 'failed' | 'blocked' */
+    executionState: text('execution_state'),
 
     createdAt: integer('created_at').default(sql`(unixepoch())`),
   },
@@ -131,6 +253,122 @@ export const actionLogs = sqliteTable(
     reviewIdx: index('action_logs_review_idx').on(table.reviewVerdict),
     noteRetryIdx: index('action_logs_note_retry_idx').on(table.status, table.noteAttempts),
     promptIdx: index('action_logs_prompt_idx').on(table.promptFingerprint),
+    priorityIdx: index('action_logs_priority_idx').on(table.tenantId, table.priority),
+    categoryIdx: index('action_logs_category_idx').on(table.tenantId, table.category),
+    clusterIdx: index('action_logs_cluster_idx').on(table.clusterId),
+    approvalIdx: index('action_logs_approval_idx').on(table.tenantId, table.approvalState),
+  }),
+);
+
+export const incidentClusters = sqliteTable(
+  'incident_clusters',
+  {
+    id: text('id').primaryKey(),
+    tenantId: text('tenant_id').references(() => tenants.id),
+    /** Null for a cluster spanning several clients — a vendor or upstream outage. */
+    clientId: text('client_id'),
+    label: text('label').notNull(),
+    category: text('category'),
+    /** JSON string[] of the terms the tickets share. */
+    terms: text('terms'),
+    ticketCount: integer('ticket_count').default(0),
+    clientCount: integer('client_count').default(0),
+    /** 'open' | 'acknowledged' | 'resolved' */
+    status: text('status').default('open'),
+    firstSeenAt: integer('first_seen_at'),
+    lastSeenAt: integer('last_seen_at'),
+    acknowledgedBy: text('acknowledged_by'),
+    acknowledgedAt: integer('acknowledged_at'),
+    createdAt: integer('created_at').default(sql`(unixepoch())`),
+  },
+  (table) => ({
+    tenantIdx: index('incident_clusters_tenant_idx').on(table.tenantId, table.status, table.lastSeenAt),
+  }),
+);
+
+export const approvals = sqliteTable(
+  'approvals',
+  {
+    id: text('id').primaryKey(),
+    actionLogId: text('action_log_id')
+      .notNull()
+      .references(() => actionLogs.id, { onDelete: 'cascade' }),
+    userId: text('user_id'),
+    userEmail: text('user_email'),
+    /** 'approved' | 'rejected' */
+    decision: text('decision').notNull(),
+    /** For a rejection: 'wrong_action' | 'wrong_target' | 'not_authorised' | 'duplicate' | 'other'. */
+    reason: text('reason'),
+    comment: text('comment'),
+    /** How the approver confirmed the requester is who they say — required for identity-sensitive changes. */
+    verificationMethod: text('verification_method'),
+    verificationNote: text('verification_note'),
+    createdAt: integer('created_at').default(sql`(unixepoch())`),
+  },
+  (table) => ({
+    logIdx: index('approvals_log_idx').on(table.actionLogId),
+  }),
+);
+
+export const runbooks = sqliteTable(
+  'runbooks',
+  {
+    id: text('id').primaryKey(),
+    tenantId: text('tenant_id').references(() => tenants.id),
+    /** Null means it applies to every client. */
+    clientId: text('client_id'),
+    title: text('title').notNull(),
+    body: text('body').notNull(),
+    /** JSON string[]. */
+    tags: text('tags'),
+    /** 'swoop' (written here) or 'superops' (synced, read-only). */
+    source: text('source').default('swoop'),
+    externalId: text('external_id'),
+    updatedBy: text('updated_by'),
+    updatedAt: integer('updated_at').default(sql`(unixepoch())`),
+    createdAt: integer('created_at').default(sql`(unixepoch())`),
+  },
+  (table) => ({
+    scopeIdx: index('runbooks_scope_idx').on(table.tenantId, table.clientId),
+  }),
+);
+
+export const executions = sqliteTable(
+  'executions',
+  {
+    id: text('id').primaryKey(),
+    actionLogId: text('action_log_id')
+      .notNull()
+      .references(() => actionLogs.id, { onDelete: 'cascade' }),
+    tenantId: text('tenant_id'),
+    clientId: text('client_id'),
+    action: text('action').notNull(),
+    /** 'dry_run' | 'live' */
+    mode: text('mode').notNull(),
+    /** 'running' | 'dry_run_ok' | 'succeeded' | 'noop' | 'failed' | 'blocked' | 'uncertain' — sent, but the outcome is unknown */
+    status: text('status').notNull(),
+    startedBy: text('started_by'),
+    startedAt: integer('started_at').default(sql`(unixepoch())`),
+    finishedAt: integer('finished_at'),
+    target: text('target'),
+    m365Tenant: text('m365_tenant'),
+    /** JSON ExecutionStep[] with secrets redacted. */
+    steps: text('steps'),
+    /** 'verified' | 'reported' | 'pending' | 'failed' | 'skipped' */
+    verification: text('verification'),
+    verificationDetail: text('verification_detail'),
+    summary: text('summary'),
+    /** Encrypted one-time secret, e.g. a temporary password. Never logged. */
+    secret: text('secret'),
+    secretExpiresAt: integer('secret_expires_at'),
+    secretRevealedBy: text('secret_revealed_by'),
+    secretRevealedAt: integer('secret_revealed_at'),
+    rollback: text('rollback'),
+    notePosted: integer('note_posted', { mode: 'boolean' }).default(false),
+    replyPosted: integer('reply_posted', { mode: 'boolean' }).default(false),
+  },
+  (table) => ({
+    logIdx: index('executions_log_idx').on(table.actionLogId, table.startedAt),
   }),
 );
 

@@ -1,4 +1,4 @@
-import { and, eq, lte, or, isNull } from 'drizzle-orm';
+import { and, desc, eq, lte, or, isNull, sql } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
 import { db } from '../db';
 import { tenants, clients, actionLogs, processedTickets } from '../db/schema';
@@ -7,9 +7,12 @@ import { createPsaClient } from './psa/factory';
 import type { SuperOpsClient } from './psa/superops';
 import { PsaError } from './psa/superops';
 import type { PsaTicket } from './psa/interface';
-import { classifyTicket, applyPolicy, AiError } from './ai';
-import { formatProposalNote, isNoteFormat } from './note-format';
-import { matchTicketToClient, emptySummary, type PollSummary } from './matching';
+import { AiError } from './ai';
+import { emptySummary, type PollSummary } from './matching';
+import { resolveClient, type MatchMethod } from './triage/tenancy';
+import { runTriage } from './triage/pipeline';
+import { expireStaleApprovals } from './approvals/service';
+import { sweepExecutions } from './execution/executor';
 import { pruneAllTenants } from './retention';
 import { createLogger, describeError } from '../lib/logger';
 import { runPool } from '../lib/pool';
@@ -42,6 +45,7 @@ const SUPERVISOR_INTERVAL_MS = 30_000;
 const RETENTION_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 let retentionTimer: ReturnType<typeof setInterval> | null = null;
+let executionSweepTimer: ReturnType<typeof setInterval> | null = null;
 
 export function startPoller(): void {
   if (running) return;
@@ -55,6 +59,14 @@ export function startPoller(): void {
   const firstPrune = setTimeout(() => void pruneAllTenants(), 60_000);
   firstPrune.unref?.();
   retentionTimer = setInterval(() => void pruneAllTenants(), RETENTION_INTERVAL_MS);
+  // A run interrupted by a restart must be looked at by a person, and a
+  // temporary password must not outlive its window.
+  void sweepExecutions().catch((err) => log.error('Execution sweep failed', err));
+  executionSweepTimer = setInterval(
+    () => void sweepExecutions().catch((err) => log.error('Execution sweep failed', err)),
+    5 * 60_000,
+  );
+  executionSweepTimer.unref?.();
   retentionTimer.unref?.();
 }
 
@@ -74,6 +86,10 @@ export async function stopPoller(timeoutMs = 20_000): Promise<void> {
   if (retentionTimer) {
     clearInterval(retentionTimer);
     retentionTimer = null;
+  }
+  if (executionSweepTimer) {
+    clearInterval(executionSweepTimer);
+    executionSweepTimer = null;
   }
   for (const schedule of schedules.values()) clearTimeout(schedule.timer);
   schedules.clear();
@@ -197,10 +213,10 @@ export async function runTenantCycle(tenant: Tenant): Promise<PollSummary> {
       return summary;
     }
 
-    const enabledClients = await db
-      .select()
-      .from(clients)
-      .where(and(eq(clients.tenantId, tenant.id), eq(clients.automationEnabled, true)));
+    // Every client, not just the enabled ones: tenant recognition needs to know
+    // which domains belong to whom to spot a request that crosses clients.
+    const allClients = await db.select().from(clients).where(eq(clients.tenantId, tenant.id));
+    const enabledClients = allClients.filter((c) => c.automationEnabled);
 
     if (enabledClients.length === 0) {
       summary.outcome = 'idle';
@@ -249,11 +265,15 @@ export async function runTenantCycle(tenant: Tenant): Promise<PollSummary> {
     // before any slow work, so running several at once cannot double-process.
     await runPool(
       tickets,
-      (ticket) => processTicket(ticket, tenant, enabledClients, psa, summary, retrySet),
+      (ticket) => processTicket(ticket, tenant, allClients, psa, summary, retrySet),
       {
         concurrency: clampConcurrency(tenant.classifyConcurrency),
         shouldContinue: () => running,
       },
+    );
+
+    await expireStaleApprovals(tenant.id).catch((err) =>
+      log.warn(`Tenant ${tenant.name}: could not expire stale approvals — ${describeError(err)}`),
     );
 
     // Only advance the watermark once the fetch succeeded, so a failed poll
@@ -357,7 +377,7 @@ async function loadRetryableTickets(tenantId: string): Promise<string[]> {
 async function processTicket(
   ticket: PsaTicket,
   tenant: Tenant,
-  enabledClients: Client[],
+  allClients: Client[],
   psa: SuperOpsClient,
   summary: PollSummary,
   retrySet: Set<string>,
@@ -385,11 +405,14 @@ async function processTicket(
     }
   }
 
-  const matchedClient = matchTicketToClient(ticket, enabledClients);
-  if (!matchedClient) {
+  // Resolved against every client so a ticket from a disabled client is never
+  // attributed to an enabled one that happens to share a domain.
+  const match = resolveClient(ticket, allClients);
+  if (!match || !match.client.automationEnabled) {
     summary.skipped['client-not-enabled']++;
     return;
   }
+  const matchedClient = match.client;
 
   const attempt = (ledger?.attempts ?? 0) + 1;
 
@@ -407,28 +430,18 @@ async function processTicket(
 
   log.debug(`Ticket ${ticket.ticketId} (attempt ${attempt}): "${enriched.subject}"`);
 
-  const threshold = tenant.confidenceThreshold ?? 0.75;
-
-  let result;
+  let run;
   try {
-    result = await classifyTicket(
-      {
-        subject: enriched.subject,
-        body: enriched.body,
-        requesterEmail: enriched.requesterEmail,
-        requesterName: enriched.requesterName,
-        priority: enriched.priority,
-        status: enriched.status,
-      },
-      {
-        mspName: tenant.name,
-        clientName: matchedClient.name,
-        clientContext: matchedClient.contextNotes,
-        confidenceThreshold: threshold,
-      },
+    run = await runTriage({
       tenant,
-      matchedClient.systemPromptOverride,
-    );
+      client: matchedClient,
+      matchMethod: match.method,
+      allClients,
+      ticket: enriched,
+      psa,
+      postNote: !tenant.dryRun,
+      previewNote: Boolean(tenant.dryRun),
+    });
   } catch (err) {
     const message = describeError(err);
     const retryable = err instanceof AiError ? err.retryable : true;
@@ -449,69 +462,13 @@ async function processTicket(
     return;
   }
 
-  const { classification, adjustments: policyAdjustments } = applyPolicy(result.classification, {
-    confidenceThreshold: threshold,
-    sourceText: `${enriched.subject}\n${enriched.body}\n${enriched.requesterEmail ?? ''}`,
-  });
-  const adjustments = [...result.adjustments, ...policyAdjustments];
-
-  const note = formatProposalNote(classification, {
-    mspName: tenant.name,
-    dryRun: Boolean(tenant.dryRun),
-    adjustments,
-    format: isNoteFormat(tenant.noteFormat) ? tenant.noteFormat : 'plain',
-  });
-
-  let notePosted = false;
-  let noteError: string | null = null;
-  if (tenant.dryRun) {
-    noteError = null;
-  } else {
-    try {
-      await psa.addTicketNote(ticket.ticketId, note, true);
-      notePosted = true;
-    } catch (err) {
-      noteError = describeError(err);
-      log.error(`Ticket ${ticket.ticketId}: could not post the note — ${noteError}`);
-    }
-  }
-
-  await db.insert(actionLogs).values({
-    id: uuidv4(),
-    tenantId: tenant.id,
-    clientId: matchedClient.id,
-    ticketId: ticket.ticketId,
-    ticketDisplayId: enriched.displayId,
-    ticketSubject: enriched.subject,
-    ticketBody: enriched.body || null,
-    requesterEmail: enriched.requesterEmail,
-    classification: classification.classification,
-    confidence: classification.confidence,
-    sensitivity: classification.sensitivity,
-    entities: JSON.stringify(classification.entities),
-    reasoning: classification.reasoning,
-    followUpQuestion: classification.follow_up_question,
-    escalationReason: classification.escalation_reason,
-    proposedPsaNote: note,
-    rawAiResponse: result.rawResponse,
-    status: noteError ? 'note_failed' : 'classified',
-    errorMessage: noteError,
-    aiModel: result.model,
-    promptFingerprint: result.promptFingerprint,
-    aiLatencyMs: result.latencyMs,
-    promptTokens: result.promptTokens,
-    completionTokens: result.completionTokens,
-    notePosted,
-    noteError,
-    noteAttempts: tenant.dryRun ? 0 : 1,
-  });
-
   await markDone(tenant.id, ticket.ticketId, attempt);
   summary.classified++;
 
+  const verdict = run.outcome.classification;
   log.info(
-    `Ticket ${enriched.displayId || ticket.ticketId} → ${classification.classification} ` +
-      `(${Math.round(classification.confidence * 100)}%, ${result.latencyMs}ms${tenant.dryRun ? ', dry run' : ''})`,
+    `Ticket ${enriched.displayId || ticket.ticketId} → ${run.outcome.priority} ${verdict.triage.category} / ${verdict.classification} ` +
+      `(${Math.round(verdict.confidence * 100)}%, ${run.result.latencyMs}ms${tenant.dryRun ? ', dry run' : ''})`,
   );
 }
 
@@ -646,6 +603,7 @@ export async function reclassifyTicket(
     .select()
     .from(actionLogs)
     .where(and(eq(actionLogs.tenantId, tenantId), eq(actionLogs.ticketId, ticketId)))
+    .orderBy(desc(actionLogs.createdAt), sql`rowid DESC`)
     .limit(1);
   if (!previous) return { ok: false, error: 'No previous classification found for that ticket' };
 
@@ -676,84 +634,24 @@ export async function reclassifyTicket(
     }
   }
 
-  const threshold = tenant.confidenceThreshold ?? 0.75;
+  if (!client) return { ok: false, error: 'The client this ticket belonged to no longer exists' };
+  const allClients = await db.select().from(clients).where(eq(clients.tenantId, tenant.id));
 
-  let result;
   try {
-    result = await classifyTicket(
-      {
-        subject: ticket.subject,
-        body: ticket.body,
-        requesterEmail: ticket.requesterEmail,
-        requesterName: ticket.requesterName,
-      },
-      {
-        mspName: tenant.name,
-        clientName: client?.name ?? 'unknown client',
-        clientContext: client?.contextNotes,
-        confidenceThreshold: threshold,
-      },
+    const run = await runTriage({
       tenant,
-      client?.systemPromptOverride,
-    );
+      client,
+      matchMethod: (previous.matchMethod as MatchMethod | null) ?? 'company_id',
+      allClients,
+      ticket,
+      psa,
+      postNote: Boolean(options.postNote) && !tenant.dryRun,
+      previewNote: !options.postNote || Boolean(tenant.dryRun),
+    });
+    return { ok: true, actionLogId: run.logId };
   } catch (err) {
     return { ok: false, error: describeError(err) };
   }
-
-  const { classification, adjustments: policyAdjustments } = applyPolicy(result.classification, {
-    confidenceThreshold: threshold,
-    sourceText: `${ticket.subject}\n${ticket.body}\n${ticket.requesterEmail ?? ''}`,
-  });
-  const adjustments = [...result.adjustments, ...policyAdjustments];
-  const note = formatProposalNote(classification, {
-    mspName: tenant.name,
-    dryRun: !options.postNote || Boolean(tenant.dryRun),
-    adjustments,
-    format: isNoteFormat(tenant.noteFormat) ? tenant.noteFormat : 'plain',
-  });
-
-  let notePosted = false;
-  let noteError: string | null = null;
-  if (options.postNote && !tenant.dryRun) {
-    try {
-      await psa.addTicketNote(ticketId, note, true);
-      notePosted = true;
-    } catch (err) {
-      noteError = describeError(err);
-    }
-  }
-
-  const id = uuidv4();
-  await db.insert(actionLogs).values({
-    id,
-    tenantId,
-    clientId: previous.clientId,
-    ticketId,
-    ticketDisplayId: ticket.displayId,
-    ticketSubject: ticket.subject,
-    ticketBody: ticket.body || null,
-    requesterEmail: ticket.requesterEmail,
-    classification: classification.classification,
-    confidence: classification.confidence,
-    sensitivity: classification.sensitivity,
-    entities: JSON.stringify(classification.entities),
-    reasoning: classification.reasoning,
-    followUpQuestion: classification.follow_up_question,
-    escalationReason: classification.escalation_reason,
-    proposedPsaNote: note,
-    rawAiResponse: result.rawResponse,
-    status: noteError ? 'note_failed' : 'classified',
-    errorMessage: noteError,
-    aiModel: result.model,
-    promptFingerprint: result.promptFingerprint,
-    aiLatencyMs: result.latencyMs,
-    promptTokens: result.promptTokens,
-    completionTokens: result.completionTokens,
-    notePosted,
-    noteError,
-  });
-
-  return { ok: true, actionLogId: id };
 }
 
 export { PsaError };

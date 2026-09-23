@@ -6,28 +6,14 @@
     <meta name="color-scheme" content="light dark" />
     <meta
       name="description"
-      content="Swoop — open source AI ticket triage for MSPs. Classifies PSA tickets and proposes actions, read-only by default."
+      content="Swoop — open source AI ticket triage for MSPs. Prioritises, routes and explains every ticket, and proposes actions for approval."
     />
     <meta name="robots" content="noindex, nofollow" />
     <title>Swoop — AI ticket triage</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <script>
-      // Set the theme class before first paint so a dark-mode user never sees
-      // a white flash while the React bundle loads.
-      try {
-        var stored = localStorage.getItem('swoop_theme');
-        var dark =
-          stored === 'dark' ||
-          ((!stored || stored === 'system') &&
-            window.matchMedia('(prefers-color-scheme: dark)').matches);
-        if (dark) {
-          document.documentElement.classList.add('dark');
-          document.documentElement.style.colorScheme = 'dark';
-        }
-      } catch (e) {
-        /* storage blocked — fall back to the light theme */
-      }
-    </script>
+    <!-- A file, not an inline script: the server's CSP (script-src 'self')
+         blocks inline scripts, which silently disabled this. -->
+    <script src="/theme-init.js"></script>
   </head>
   <body>
     <div id="root"></div>

@@ -237,6 +237,237 @@ export const migrations: Migration[] = [
       addColumnIfMissing(db, 'clients', 'system_prompt_override', 'TEXT');
     },
   },
+
+  {
+    // The full triage verdict: what kind of ticket this is, how urgent, who
+    // should take it, and what to say to the requester — not just which of
+    // nine identity actions it resembles.
+    id: '011_triage_verdict',
+    up: (db) => {
+      const cols: Array<[string, string]> = [
+        ['category', 'TEXT'],
+        ['subcategory', 'TEXT'],
+        ['impact', 'TEXT'],
+        ['urgency', 'TEXT'],
+        ['priority', 'TEXT'],
+        ['summary', 'TEXT'],
+        ['sentiment', 'TEXT'],
+        ['suggested_queue', 'TEXT'],
+        ['first_response', 'TEXT'],
+        ['next_steps', 'TEXT'],
+        ['signals', 'TEXT'],
+        ['triage_version', 'INTEGER'],
+        ['review_correct_category', 'TEXT'],
+        ['review_correct_priority', 'TEXT'],
+      ];
+      for (const [name, def] of cols) addColumnIfMissing(db, 'action_logs', name, def);
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS action_logs_priority_idx ON action_logs (tenant_id, priority);
+        CREATE INDEX IF NOT EXISTS action_logs_category_idx ON action_logs (tenant_id, category);
+      `);
+      // Per-tenant triage settings (business hours, queue routing, thresholds)
+      // as one JSON document, validated with defaults on read.
+      addColumnIfMissing(db, 'tenants', 'triage_settings', 'TEXT');
+    },
+  },
+
+  {
+    // Tenant recognition: which email domains and which Microsoft 365 tenant
+    // belong to each client, so a ticket can be matched on who sent it and a
+    // request that reaches across clients can be caught.
+    id: '012_tenancy_recognition',
+    up: (db) => {
+      addColumnIfMissing(db, 'clients', 'email_domains', 'TEXT');
+      addColumnIfMissing(db, 'clients', 'm365_tenant_id', 'TEXT');
+      addColumnIfMissing(db, 'clients', 'm365_default_domain', 'TEXT');
+      addColumnIfMissing(db, 'clients', 'vip_emails', 'TEXT');
+      addColumnIfMissing(db, 'action_logs', 'match_method', 'TEXT');
+      addColumnIfMissing(db, 'action_logs', 'requester_domain', 'TEXT');
+      addColumnIfMissing(db, 'action_logs', 'cross_tenant', 'INTEGER DEFAULT 0');
+      addColumnIfMissing(db, 'action_logs', 'tenancy', 'TEXT');
+    },
+  },
+
+  {
+    // Similar tickets, duplicates and incident clusters.
+    id: '013_similarity_and_clusters',
+    up: (db) => {
+      addColumnIfMissing(db, 'action_logs', 'duplicate_of_log_id', 'TEXT');
+      addColumnIfMissing(db, 'action_logs', 'similar', 'TEXT');
+      addColumnIfMissing(db, 'action_logs', 'cluster_id', 'TEXT');
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS incident_clusters (
+          id TEXT PRIMARY KEY,
+          tenant_id TEXT REFERENCES tenants(id),
+          client_id TEXT,
+          label TEXT NOT NULL,
+          category TEXT,
+          terms TEXT,
+          ticket_count INTEGER DEFAULT 0,
+          client_count INTEGER DEFAULT 0,
+          status TEXT DEFAULT 'open',
+          first_seen_at INTEGER,
+          last_seen_at INTEGER,
+          acknowledged_by TEXT,
+          acknowledged_at INTEGER,
+          created_at INTEGER DEFAULT (unixepoch())
+        );
+        CREATE INDEX IF NOT EXISTS incident_clusters_tenant_idx
+          ON incident_clusters (tenant_id, status, last_seen_at);
+        CREATE INDEX IF NOT EXISTS action_logs_cluster_idx ON action_logs (cluster_id);
+      `);
+    },
+  },
+
+  {
+    // Multiple people, each with a role, and a record of who did what.
+    id: '014_users_roles_audit',
+    up: (db) => {
+      addColumnIfMissing(db, 'users', 'display_name', 'TEXT');
+      addColumnIfMissing(db, 'users', 'disabled', 'INTEGER DEFAULT 0');
+      // Bumped on password change or disable, which revokes every token
+      // issued before — stateless tokens are otherwise unrevocable.
+      addColumnIfMissing(db, 'users', 'token_version', 'INTEGER DEFAULT 0');
+      addColumnIfMissing(db, 'users', 'invited_by', 'TEXT');
+      // Anyone who existed before roles did was, in effect, an admin.
+      db.exec(`UPDATE users SET role = 'admin' WHERE role IS NULL OR role = ''`);
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS invites (
+          id TEXT PRIMARY KEY,
+          email TEXT NOT NULL,
+          role TEXT NOT NULL,
+          token_hash TEXT NOT NULL UNIQUE,
+          created_by TEXT,
+          expires_at INTEGER NOT NULL,
+          accepted_at INTEGER,
+          revoked_at INTEGER,
+          created_at INTEGER DEFAULT (unixepoch())
+        );
+
+        CREATE TABLE IF NOT EXISTS audit_log (
+          id TEXT PRIMARY KEY,
+          user_id TEXT,
+          user_email TEXT,
+          action TEXT NOT NULL,
+          target_type TEXT,
+          target_id TEXT,
+          tenant_id TEXT,
+          detail TEXT,
+          ip TEXT,
+          created_at INTEGER DEFAULT (unixepoch())
+        );
+        CREATE INDEX IF NOT EXISTS audit_log_created_idx ON audit_log (created_at);
+        CREATE INDEX IF NOT EXISTS audit_log_target_idx ON audit_log (target_type, target_id);
+      `);
+    },
+  },
+
+  {
+    // Approvals: a proposed action waits for one or two people to sign it off.
+    // Approval produces an execution plan; it does not execute anything.
+    id: '015_approvals',
+    up: (db) => {
+      addColumnIfMissing(db, 'tenants', 'approval_policy', 'TEXT');
+      addColumnIfMissing(db, 'action_logs', 'approval_state', 'TEXT');
+      addColumnIfMissing(db, 'action_logs', 'approvals_required', 'INTEGER DEFAULT 0');
+      addColumnIfMissing(db, 'action_logs', 'approval_reason', 'TEXT');
+      addColumnIfMissing(db, 'action_logs', 'approval_expires_at', 'INTEGER');
+      addColumnIfMissing(db, 'action_logs', 'execution_plan', 'TEXT');
+      addColumnIfMissing(db, 'action_logs', 'superseded_by', 'TEXT');
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS approvals (
+          id TEXT PRIMARY KEY,
+          action_log_id TEXT NOT NULL REFERENCES action_logs(id) ON DELETE CASCADE,
+          user_id TEXT,
+          user_email TEXT,
+          decision TEXT NOT NULL,
+          reason TEXT,
+          comment TEXT,
+          created_at INTEGER DEFAULT (unixepoch())
+        );
+        CREATE INDEX IF NOT EXISTS approvals_log_idx ON approvals (action_log_id);
+        CREATE INDEX IF NOT EXISTS action_logs_approval_idx ON action_logs (tenant_id, approval_state);
+      `);
+    },
+  },
+
+  {
+    // Read-only CIPP lookups of the user a ticket is about.
+    id: '016_cipp_enrichment',
+    up: (db) => {
+      addColumnIfMissing(db, 'tenants', 'cipp_api_url', 'TEXT');
+      addColumnIfMissing(db, 'tenants', 'cipp_tenant_id', 'TEXT');
+      addColumnIfMissing(db, 'tenants', 'cipp_client_id', 'TEXT');
+      addColumnIfMissing(db, 'tenants', 'cipp_client_secret', 'TEXT');
+      addColumnIfMissing(db, 'tenants', 'cipp_enabled', 'INTEGER DEFAULT 0');
+      addColumnIfMissing(db, 'action_logs', 'enrichment', 'TEXT');
+    },
+  },
+
+  {
+    // Knowledge, investigation and execution: Swoop looking things up for
+    // itself, and carrying out an approved change with proof it worked.
+    id: '017_agent_knowledge_execution',
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS runbooks (
+          id TEXT PRIMARY KEY,
+          tenant_id TEXT REFERENCES tenants(id),
+          client_id TEXT,
+          title TEXT NOT NULL,
+          body TEXT NOT NULL,
+          tags TEXT,
+          source TEXT DEFAULT 'swoop',
+          external_id TEXT,
+          updated_by TEXT,
+          updated_at INTEGER DEFAULT (unixepoch()),
+          created_at INTEGER DEFAULT (unixepoch())
+        );
+        CREATE INDEX IF NOT EXISTS runbooks_scope_idx ON runbooks (tenant_id, client_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS runbooks_external_idx ON runbooks (tenant_id, source, external_id);
+
+        CREATE TABLE IF NOT EXISTS executions (
+          id TEXT PRIMARY KEY,
+          action_log_id TEXT NOT NULL REFERENCES action_logs(id) ON DELETE CASCADE,
+          tenant_id TEXT,
+          client_id TEXT,
+          action TEXT NOT NULL,
+          mode TEXT NOT NULL,
+          status TEXT NOT NULL,
+          started_by TEXT,
+          started_at INTEGER DEFAULT (unixepoch()),
+          finished_at INTEGER,
+          target TEXT,
+          m365_tenant TEXT,
+          steps TEXT,
+          verification TEXT,
+          verification_detail TEXT,
+          summary TEXT,
+          secret TEXT,
+          secret_expires_at INTEGER,
+          secret_revealed_by TEXT,
+          secret_revealed_at INTEGER,
+          rollback TEXT,
+          note_posted INTEGER DEFAULT 0,
+          reply_posted INTEGER DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS executions_log_idx ON executions (action_log_id, started_at);
+        -- One live run per proposal, ever: a retry after a timeout must not
+        -- reset a password twice or double-assign a paid licence.
+        CREATE UNIQUE INDEX IF NOT EXISTS executions_live_once_idx
+          ON executions (action_log_id) WHERE mode = 'live' AND status IN ('running', 'succeeded', 'noop', 'uncertain');
+      `);
+      addColumnIfMissing(db, 'action_logs', 'investigation', 'TEXT');
+      addColumnIfMissing(db, 'action_logs', 'kb_refs', 'TEXT');
+      addColumnIfMissing(db, 'action_logs', 'execution_state', 'TEXT');
+      addColumnIfMissing(db, 'approvals', 'verification_method', 'TEXT');
+      addColumnIfMissing(db, 'approvals', 'verification_note', 'TEXT');
+      addColumnIfMissing(db, 'clients', 'authorised_contacts', 'TEXT');
+      addColumnIfMissing(db, 'tenants', 'agent_settings', 'TEXT');
+      addColumnIfMissing(db, 'tenants', 'execution_policy', 'TEXT');
+      addColumnIfMissing(db, 'tenants', 'kb_last_synced_at', 'INTEGER');
+    },
+  },
 ];
 
 /**

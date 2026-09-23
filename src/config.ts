@@ -37,6 +37,17 @@ export interface Config {
    * pick the endpoint from the tenant's configured data centre.
    */
   superopsApiUrl: string | null;
+  /**
+   * Entra ID authority used to get CIPP API tokens. Override for a sovereign
+   * cloud (https://login.microsoftonline.us) or a local mock.
+   */
+  cippAuthorityUrl: string;
+  /**
+   * Install-wide kill switch for execution. When set, no change is made in
+   * any client tenant whatever the per-tenant policy says — for an incident,
+   * or an operator who wants the guarantee enforced outside the app.
+   */
+  executionDisabled: boolean;
 }
 
 const INSECURE_SECRETS = new Set([
@@ -147,6 +158,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     },
     trustProxy: parseBoolEnv(env.TRUST_PROXY, false),
     superopsApiUrl: env.SUPEROPS_API_URL?.trim().replace(/\/+$/, '') || null,
+    cippAuthorityUrl:
+      env.CIPP_AUTHORITY_URL?.trim().replace(/\/+$/, '') || 'https://login.microsoftonline.com',
+    executionDisabled: parseBoolEnv(env.SWOOP_DISABLE_EXECUTION, false),
   };
 }
 

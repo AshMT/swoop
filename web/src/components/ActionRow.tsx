@@ -10,7 +10,8 @@ import {
   type ReviewVerdict,
 } from '../api';
 import { formatDuration, formatRelative, humanClassification, parseEntities, hasEntities } from '../lib/format';
-import { Badge, ClassificationBadge, ConfidenceBar, Spinner, useToast } from './ui';
+import { Link } from 'react-router-dom';
+import { Badge, ClassificationBadge, ConfidenceBar, PriorityBadge, SignalChips, Spinner, useToast } from './ui';
 import { CheckIcon, ChevronDownIcon, ChevronRightIcon, ExternalIcon, RefreshIcon, XIcon } from './Icons';
 
 interface Props {
@@ -135,10 +136,14 @@ export default function ActionRow({
         </td>
 
         <td className="td max-w-xs cursor-pointer" onClick={expand}>
-          <div className="truncate font-medium text-slate-900 dark:text-slate-100">
-            {log.ticketSubject || '(no subject)'}
+          <div className="flex items-center gap-2">
+            {log.priority && <PriorityBadge value={log.priority} />}
+            <span className="truncate font-medium text-slate-900 dark:text-slate-100">
+              {log.ticketSubject || '(no subject)'}
+            </span>
           </div>
           <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
+            <SignalChips signals={log.signals} minSeverity="warn" max={2} />
             {log.sensitivity === 'high' && <Badge tone="danger">High sensitivity</Badge>}
             {log.status === 'note_failed' && (
               <Badge tone="warning">
@@ -287,6 +292,9 @@ export default function ActionRow({
                     <Row label="Ticket ID" value={log.ticketId} mono />
                   </dl>
                   <div className="mt-3 flex flex-wrap gap-2">
+                    <Link to={`/tickets/${log.id}`} className="btn-primary !py-1 text-xs">
+                      Full triage
+                    </Link>
                     {ticketUrl && (
                       <a href={ticketUrl} target="_blank" rel="noreferrer" className="btn-secondary !py-1 text-xs">
                         <ExternalIcon className="h-3.5 w-3.5" />
