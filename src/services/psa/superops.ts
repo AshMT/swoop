@@ -193,35 +193,75 @@ export class SuperOpsClient implements PSAClient {
   async enrichTicket(ticket: PsaTicket): Promise<PsaTicket> {
     const caps = await this.ensureCapabilities();
     if (ticket.body) return ticket;
-    if (!caps.detailQuery || !caps.detailArgName || !caps.bodyField) return ticket;
+    try {
+      const body =
+        caps.bodyField && caps.detailQuery && caps.detailArgName
+          ? await this.fetchBodyField(caps, ticket.ticketId)
+          : caps.conversationQuery
+            ? await this.fetchFirstConversation(caps, ticket.ticketId)
+            : null;
+      if (body) return { ...ticket, body };
+    } catch (err) {
+      log.warn(`Could not fetch the body for ticket ${ticket.ticketId}: ${describeError(err)}`);
+    }
+    return ticket;
+  }
 
-    const selection = [caps.idField, caps.bodyField].filter(Boolean).join('\n        ');
-    const argValue = caps.detailArgIdField
-      ? { [caps.detailArgIdField]: ticket.ticketId }
-      : ticket.ticketId;
-
+  private async fetchBodyField(caps: PsaCapabilities, ticketId: string): Promise<string | null> {
+    const bodySelection = caps.bodySubField ? `${caps.bodyField} { ${caps.bodySubField} }` : caps.bodyField;
+    const argValue = caps.detailArgIdField ? { [caps.detailArgIdField]: ticketId } : ticketId;
     // The argument is inlined as a literal rather than declared as a variable:
     // a `$var` declaration must name its type exactly, and that type is only
     // known from introspection. `literal()` JSON-escapes every string.
     const query = `
       query SwoopTicketDetail {
         ${caps.detailQuery}(${caps.detailArgName}: ${literal(argValue)}) {
+          ${caps.idField}
+          ${bodySelection}
+        }
+      }
+    `;
+    const data = await this.request<Record<string, unknown>>(query);
+    const node = data[caps.detailQuery!] as Record<string, unknown> | null;
+    let raw = node?.[caps.bodyField!];
+    if (caps.bodySubField && raw && typeof raw === 'object') raw = (raw as Record<string, unknown>)[caps.bodySubField];
+    return typeof raw === 'string' && raw.trim() ? htmlToText(raw) : null;
+  }
+
+  /**
+   * The requester's original message, from the ticket's conversation thread —
+   * where SuperOps keeps it. The earliest entry is the one that opened the
+   * ticket; later replies are left out so a long thread cannot drown it.
+   */
+  private async fetchFirstConversation(caps: PsaCapabilities, ticketId: string): Promise<string | null> {
+    const argValue = caps.conversationArgIdField ? { [caps.conversationArgIdField]: ticketId } : ticketId;
+    const entry = [caps.conversationContentField, caps.conversationTimeField].filter(Boolean).join(' ');
+    const selection = caps.conversationResultField ? `${caps.conversationResultField} { ${entry} }` : entry;
+    const query = `
+      query SwoopTicketConversations {
+        ${caps.conversationQuery}(${caps.conversationArgName}: ${literal(argValue)}) {
           ${selection}
         }
       }
     `;
-
-    try {
-      const data = await this.request<Record<string, unknown>>(query);
-      const node = data[caps.detailQuery] as Record<string, unknown> | null;
-      const rawBody = node?.[caps.bodyField];
-      if (typeof rawBody === 'string' && rawBody.trim()) {
-        return { ...ticket, body: htmlToText(rawBody) };
-      }
-    } catch (err) {
-      log.warn(`Could not fetch the body for ticket ${ticket.ticketId}: ${describeError(err)}`);
-    }
-    return ticket;
+    const data = await this.request<Record<string, unknown>>(query);
+    const root = data[caps.conversationQuery!];
+    const rows = caps.conversationResultField
+      ? (root as Record<string, unknown> | null)?.[caps.conversationResultField]
+      : root;
+    if (!Array.isArray(rows)) return null;
+    const entries = rows
+      .filter((r): r is Record<string, unknown> => Boolean(r) && typeof r === 'object')
+      .map((r, index) => ({
+        text: typeof r[caps.conversationContentField!] === 'string' ? htmlToText(r[caps.conversationContentField!] as string) : '',
+        at: caps.conversationTimeField ? parseTimestamp(r[caps.conversationTimeField]) : null,
+        index,
+      }))
+      .filter((e) => e.text.trim());
+    if (entries.length === 0) return null;
+    // Order by time when every entry has one; otherwise trust the API's order.
+    if (entries.every((e) => e.at !== null)) entries.sort((a, b) => a.at! - b.at! || a.index - b.index);
+    return entries[0].text;
   }
 
   /**

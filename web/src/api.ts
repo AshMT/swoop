@@ -601,6 +601,9 @@ export interface PsaCapabilities {
   displayIdField: string | null;
   subjectField: string | null;
   bodyField: string | null;
+  bodySubField?: string | null;
+  conversationQuery?: string | null;
+  ticketFields?: string[];
   createdField: string | null;
   detailQuery: string | null;
   noteMutation: string | null;
@@ -963,3 +966,11 @@ export async function downloadCsv(params: ActionQuery = {}): Promise<void> {
 
 // ─── System ───────────────────────────────────────────────────────────────────
 export const getSystemStatus = () => api.get<SystemStatus>('/system/status');
+
+/** Where Swoop reads the ticket text from, or null when it found nowhere. */
+export function bodySource(caps: Pick<PsaCapabilities, 'bodyField' | 'bodySubField' | 'conversationQuery'> | null | undefined): string | null {
+  if (!caps) return null;
+  if (caps.bodyField) return caps.bodySubField ? `${caps.bodyField}.${caps.bodySubField}` : caps.bodyField;
+  if (caps.conversationQuery) return `${caps.conversationQuery} (first message)`;
+  return null;
+}

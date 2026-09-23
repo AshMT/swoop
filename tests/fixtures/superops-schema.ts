@@ -56,6 +56,14 @@ export interface SchemaOptions {
    * 'absent' omits the query entirely.
    */
   clientList?: 'wrapped' | 'unusable' | 'absent';
+  /**
+   * A per-ticket conversation query, where SuperOps keeps the original message:
+   * 'list' returns [TicketConversation] directly, 'wrapped' returns
+   * { conversations { ... } }, 'none' omits it.
+   */
+  conversations?: 'list' | 'wrapped' | 'none';
+  /** Put the body inside an object, as description { content }. */
+  bodyObject?: boolean;
 }
 
 export function buildFakeSchema(options: SchemaOptions = {}): FakeSchema {
@@ -66,6 +74,8 @@ export function buildFakeSchema(options: SchemaOptions = {}): FakeSchema {
     sort = 'supported',
     detailQuery = true,
     clientList = 'wrapped',
+    conversations = 'none',
+    bodyObject = false,
   } = options;
 
   const ticketFields: FakeField[] = [
@@ -79,7 +89,7 @@ export function buildFakeSchema(options: SchemaOptions = {}): FakeSchema {
     { name: 'technician', type: object('User') },
   ];
 
-  if (bodyField) ticketFields.push({ name: bodyField, type: scalar() });
+  if (bodyField) ticketFields.push({ name: bodyField, type: bodyObject ? object('RichText') : scalar() });
 
   if (clientShape === 'object') {
     ticketFields.push({ name: 'client', type: object('Client') });
@@ -135,6 +145,30 @@ export function buildFakeSchema(options: SchemaOptions = {}): FakeSchema {
       kind: 'INPUT_OBJECT',
       inputFields: [{ name: 'ticketId', type: nonNull(scalar('ID')) }],
     },
+  };
+
+  types.RichText = {
+    name: 'RichText',
+    kind: 'OBJECT',
+    fields: [
+      { name: 'content', type: scalar() },
+      { name: 'format', type: scalar() },
+    ],
+  };
+  types.TicketConversation = {
+    name: 'TicketConversation',
+    kind: 'OBJECT',
+    fields: [
+      { name: 'conversationId', type: scalar('ID') },
+      { name: 'content', type: scalar() },
+      { name: 'time', type: scalar() },
+      { name: 'user', type: scalar('JSON') },
+    ],
+  };
+  types.TicketConversationList = {
+    name: 'TicketConversationList',
+    kind: 'OBJECT',
+    fields: [{ name: 'conversations', type: list(object('TicketConversation')) }],
   };
 
   const listInputFields: FakeField[] = [
@@ -195,6 +229,14 @@ export function buildFakeSchema(options: SchemaOptions = {}): FakeSchema {
     queryFields.push({
       name: 'getTicket',
       type: object('Ticket'),
+      args: [{ name: 'input', type: nonNull(input('TicketIdentifierInput')) }],
+    });
+  }
+
+  if (conversations !== 'none') {
+    queryFields.push({
+      name: 'getTicketConversationList',
+      type: conversations === 'list' ? list(object('TicketConversation')) : object('TicketConversationList'),
       args: [{ name: 'input', type: nonNull(input('TicketIdentifierInput')) }],
     });
   }

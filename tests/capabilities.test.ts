@@ -41,10 +41,45 @@ describe('probeCapabilities', () => {
     }
   });
 
-  it('warns loudly when no body field exists at all', async () => {
+  it('warns loudly when no body field exists at all, listing the fields it saw', async () => {
     const caps = await probe({ bodyField: null });
     expect(caps.bodyField).toBeNull();
     expect(caps.warnings.join(' ')).toMatch(/subject line only/i);
+    expect(caps.warnings.join(' ')).toMatch(/Ticket fields: ticketId, displayId, subject/);
+  });
+
+  it('finds a body field by meaning when its name is not on the list', async () => {
+    const caps = await probe({ bodyField: 'problemDescription' });
+    expect(caps.bodyField).toBe('problemDescription');
+  });
+
+  it('reads a body held inside an object', async () => {
+    const caps = await probe({ bodyField: 'description', bodyObject: true });
+    expect(caps).toMatchObject({ bodyField: 'description', bodySubField: 'content' });
+  });
+
+  // SuperOps keeps the requester's message in the ticket's conversations, not
+  // on the ticket, so a schema with no body field must not mean no body.
+  it('falls back to the ticket conversation thread when the ticket has no body', async () => {
+    for (const shape of ['list', 'wrapped'] as const) {
+      const caps = await probe({ bodyField: null, conversations: shape });
+      expect(caps.bodyField, shape).toBeNull();
+      expect(caps, shape).toMatchObject({
+        conversationQuery: 'getTicketConversationList',
+        conversationArgName: 'input',
+        conversationArgIdField: 'ticketId',
+        conversationResultField: shape === 'wrapped' ? 'conversations' : null,
+        conversationContentField: 'content',
+        conversationTimeField: 'time',
+      });
+      expect(caps.warnings.join(' '), shape).not.toMatch(/subject line only/i);
+    }
+  });
+
+  it('prefers a body on the ticket over the conversation thread', async () => {
+    const caps = await probe({ conversations: 'list' });
+    expect(caps.bodyField).toBe('description');
+    expect(caps.conversationQuery).toBeNull();
   });
 
   it('resolves an object-shaped client into id and label sub-fields', async () => {
@@ -281,5 +316,55 @@ describe('literal', () => {
 
   it('omits undefined members', () => {
     expect(literal({ a: 1, b: undefined })).toBe('{a: 1}');
+  });
+});
+
+describe('reading the ticket body', () => {
+  // graphql-request brings its own fetch, so the transport is replaced on the
+  // client itself rather than stubbed globally.
+  async function clientFor(options: Parameters<typeof buildFakeSchema>[0], respond: (query: string) => unknown) {
+    const { SuperOpsClient } = await import('../src/services/psa/superops');
+    const capabilities = await probe(options);
+    const sent: string[] = [];
+    const client = new SuperOpsClient({ subdomain: 'msp', apiKey: 'k', capabilities });
+    (client as unknown as { client: { request: (req: { document: string }) => Promise<unknown> } }).client = {
+      request: async ({ document }) => {
+        sent.push(document);
+        return respond(document);
+      },
+    };
+    return { client, sent };
+  }
+
+  const bare = { ticketId: 'T-1', displayId: '1', subject: 'Locked out', body: '', status: null, priority: null, createdAt: null, clientId: null, clientName: null, requesterEmail: null, requesterName: null };
+
+  it('takes the earliest conversation entry, as text', async () => {
+    const { client, sent } = await clientFor({ bodyField: null, conversations: 'wrapped' }, () => ({
+      getTicketConversationList: {
+        conversations: [
+          { content: '<p>Thanks, trying now</p>', time: '2026-09-23T10:05:00Z' },
+          { content: '<p>I am <b>locked out</b> of Outlook</p>', time: '2026-09-23T09:00:00Z' },
+        ],
+      },
+    }));
+    const enriched = await client.enrichTicket({ ...bare });
+    expect(enriched.body).toBe('I am locked out of Outlook');
+    expect(sent[0]).toContain('getTicketConversationList(input: {ticketId: "T-1"})');
+    expect(sent[0]).toContain('conversations { content time }');
+  });
+
+  it('reads a body nested in an object', async () => {
+    const { client, sent } = await clientFor({ bodyObject: true }, () => ({
+      getTicket: { ticketId: 'T-1', description: { content: '<div>Printer offline</div>' } },
+    }));
+    expect((await client.enrichTicket({ ...bare })).body).toBe('Printer offline');
+    expect(sent[0]).toContain('description { content }');
+  });
+
+  it('leaves the ticket alone when the conversation query fails', async () => {
+    const { client } = await clientFor({ bodyField: null, conversations: 'list' }, () => {
+      throw new Error('Field required: listInfo');
+    });
+    expect((await client.enrichTicket({ ...bare })).body).toBe('');
   });
 });

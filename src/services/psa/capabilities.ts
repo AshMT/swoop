@@ -13,7 +13,7 @@ import { createLogger, describeError } from '../../lib/logger';
 const log = createLogger('SuperOps:probe');
 
 /** Version stamp — bump to force a re-probe after changing the probe logic. */
-export const CAPABILITIES_VERSION = 4;
+export const CAPABILITIES_VERSION = 5;
 
 export interface ObjectFieldShape {
   /** 'leaf' needs no sub-selection; 'object' does; 'missing' means absent. */
@@ -56,6 +56,8 @@ export interface PsaCapabilities {
   subjectField: string | null;
   /** Long-form ticket text — the thing the classifier actually needs. */
   bodyField: string | null;
+  /** When the body field is an object, the scalar inside it holding the text. */
+  bodySubField: string | null;
   statusField: string | null;
   priorityField: string | null;
   createdField: string | null;
@@ -69,6 +71,20 @@ export interface PsaCapabilities {
   detailArgIdField: string | null;
   /** Ticket fields only available on the detail query. */
   detailOnlyFields: string[];
+
+  /**
+   * Where the ticket text lives when the ticket itself has no body field.
+   * SuperOps keeps the requester's original message as the first entry of the
+   * ticket's conversation thread rather than on the ticket.
+   */
+  conversationQuery: string | null;
+  conversationArgName: string | null;
+  /** When the argument is an input object, the field inside it holding the ticket id. */
+  conversationArgIdField: string | null;
+  /** Field on the payload holding the array; null when the query returns the array itself. */
+  conversationResultField: string | null;
+  conversationContentField: string | null;
+  conversationTimeField: string | null;
 
   /** Root query listing the MSP's clients, so the UI can offer a picker. */
   clientListQuery: string | null;
@@ -150,6 +166,17 @@ const BODY_CANDIDATES = [
   'message',
   'note',
 ];
+const CONVERSATION_QUERY_CANDIDATES = [
+  'getTicketConversationList',
+  'getTicketConversations',
+  'getConversationList',
+  'getTicketThreadList',
+  'getTicketThreads',
+  'ticketConversations',
+];
+const CONVERSATION_RESULT_CANDIDATES = ['conversations', 'conversationList', 'threads', 'items', 'data', 'results'];
+const CONVERSATION_CONTENT_CANDIDATES = ['content', 'body', 'message', 'text', 'description', 'html', 'htmlContent'];
+const CONVERSATION_TIME_CANDIDATES = ['time', 'createdTime', 'createdAt', 'sentTime', 'date', 'timestamp'];
 const STATUS_CANDIDATES = ['status', 'ticketStatus', 'state'];
 const PRIORITY_CANDIDATES = ['priority', 'ticketPriority', 'urgency'];
 const CREATED_CANDIDATES = ['createdTime', 'createdAt', 'createdDate', 'creationTime'];
@@ -229,6 +256,7 @@ export async function probeCapabilities(
     displayIdField: null,
     subjectField: null,
     bodyField: null,
+    bodySubField: null,
     statusField: null,
     priorityField: null,
     createdField: null,
@@ -238,6 +266,12 @@ export async function probeCapabilities(
     detailArgName: null,
     detailArgIdField: null,
     detailOnlyFields: [],
+    conversationQuery: null,
+    conversationArgName: null,
+    conversationArgIdField: null,
+    conversationResultField: null,
+    conversationContentField: null,
+    conversationTimeField: null,
     clientListQuery: null,
     clientListArgName: null,
     clientListResultField: null,
@@ -355,14 +389,20 @@ export async function probeCapabilities(
       const detailFields = (detailType?.fields ?? []).map((f) => f.name);
       caps.detailOnlyFields = detailFields.filter((f) => !caps.ticketFields.includes(f));
       if (!caps.bodyField) {
-        caps.bodyField = pickField(detailFields, BODY_CANDIDATES);
+        await assignBodyField(caps, detailType?.fields ?? [], describeType);
       }
     }
   }
 
+  // ─── Conversation thread, where SuperOps keeps the original message ─────────
   if (!caps.bodyField) {
+    await resolveConversation(caps, queryFields, describeType);
+  }
+
+  if (!caps.bodyField && !caps.conversationQuery) {
+    const seen = caps.ticketFields.length ? ` Ticket fields: ${caps.ticketFields.join(', ')}.` : '';
     warnings.push(
-      `No ticket body field found (looked for: ${BODY_CANDIDATES.slice(0, 5).join(', ')}). Classification will use the subject line only, which measurably reduces accuracy.`,
+      `No ticket body found — no body field on the ticket (looked for: ${BODY_CANDIDATES.slice(0, 5).join(', ')}) and no conversation query (looked for: ${CONVERSATION_QUERY_CANDIDATES.slice(0, 2).join(', ')}). Classification will use the subject line only, which measurably reduces accuracy.${seen}`,
     );
   }
 
@@ -463,6 +503,95 @@ export async function probeCapabilities(
   return caps;
 }
 
+/**
+ * Picks the ticket body: a scalar by a known name, else any scalar whose name
+ * says description or body, else an object by a known name with a text field
+ * inside it (selected as `description { content }`).
+ */
+async function assignBodyField(
+  caps: PsaCapabilities,
+  fields: FieldInfo[],
+  describeType: (name: string) => Promise<TypeResponse['__type']>,
+): Promise<void> {
+  const leaves = fields.filter((f) => isLeafType(f.type)).map((f) => f.name);
+  const exact = pickField(leaves, BODY_CANDIDATES);
+  const fuzzy = leaves.find((n) => /description|body/i.test(n) && !/(id|type|format|count)$/i.test(n));
+  if (exact || fuzzy) {
+    caps.bodyField = (exact ?? fuzzy)!;
+    caps.bodySubField = null;
+    return;
+  }
+  const objects = fields.filter((f) => !isLeafType(f.type));
+  const objectName = pickField(objects.map((f) => f.name), BODY_CANDIDATES);
+  if (!objectName) return;
+  const typeName = namedType(objects.find((f) => f.name === objectName)!.type).name;
+  const type = typeName ? await describeType(typeName) : null;
+  const inner = pickField(
+    (type?.fields ?? []).filter((f) => isLeafType(f.type)).map((f) => f.name),
+    CONVERSATION_CONTENT_CANDIDATES,
+  );
+  if (inner) {
+    caps.bodyField = objectName;
+    caps.bodySubField = inner;
+  }
+}
+
+/** Finds a per-ticket conversation query and the text and time fields on its entries. */
+async function resolveConversation(
+  caps: PsaCapabilities,
+  queryFields: FieldInfo[],
+  describeType: (name: string) => Promise<TypeResponse['__type']>,
+): Promise<void> {
+  const field =
+    findRootField(queryFields, CONVERSATION_QUERY_CANDIDATES) ??
+    queryFields.find((f) => /^get\w*ticket\w*(conversation|thread)\w*$/i.test(f.name)) ??
+    null;
+  if (!field) return;
+  const arg = field.args?.[0];
+  if (!arg) return;
+
+  let argIdField: string | null = null;
+  if (namedType(arg.type).kind === 'INPUT_OBJECT') {
+    const argTypeName = namedType(arg.type).name;
+    const argType = argTypeName ? await describeType(argTypeName) : null;
+    const argFields = (argType?.inputFields ?? []).map((f) => f.name);
+    argIdField = pickField(argFields, ID_CANDIDATES);
+    if (!argIdField) return;
+  }
+
+  // Either the query returns the entries directly, or a wrapper holding them.
+  let resultField: string | null = null;
+  let entryTypeName = namedType(field.type).name;
+  if (!isListType(field.type) && entryTypeName) {
+    const wrapper = await describeType(entryTypeName);
+    const wrapperFields = wrapper?.fields ?? [];
+    const arrayField =
+      wrapperFields.find((f) => CONVERSATION_RESULT_CANDIDATES.includes(f.name)) ??
+      wrapperFields.find((f) => !isLeafType(f.type) && isListType(f.type));
+    if (!arrayField) return;
+    resultField = arrayField.name;
+    entryTypeName = namedType(arrayField.type).name;
+  }
+  const entryType = entryTypeName ? await describeType(entryTypeName) : null;
+  const scalars = (entryType?.fields ?? []).filter((f) => isLeafType(f.type)).map((f) => f.name);
+  const content = pickField(scalars, CONVERSATION_CONTENT_CANDIDATES);
+  if (!content) return;
+
+  caps.conversationQuery = field.name;
+  caps.conversationArgName = arg.name;
+  caps.conversationArgIdField = argIdField;
+  caps.conversationResultField = resultField;
+  caps.conversationContentField = content;
+  caps.conversationTimeField = pickField(scalars, CONVERSATION_TIME_CANDIDATES);
+}
+
+/** Where the ticket text comes from, for the UI. Null when nowhere. */
+export function describeBodySource(caps: Pick<PsaCapabilities, 'bodyField' | 'bodySubField' | 'conversationQuery'>): string | null {
+  if (caps.bodyField) return caps.bodySubField ? `${caps.bodyField}.${caps.bodySubField}` : caps.bodyField;
+  if (caps.conversationQuery) return `${caps.conversationQuery} (first message)`;
+  return null;
+}
+
 function findRootField(fields: FieldInfo[], candidates: readonly string[]): FieldInfo | null {
   const byLower = new Map(fields.map((f) => [f.name.toLowerCase(), f]));
   for (const candidate of candidates) {
@@ -486,17 +615,7 @@ async function assignTicketFields(
   caps.priorityField = pickField(names, PRIORITY_CANDIDATES);
   caps.createdField = pickField(names, CREATED_CANDIDATES);
 
-  // Only accept a body field whose type is a leaf — a nested object here would
-  // need a sub-selection we cannot guess, and the AI wants plain text anyway.
-  const bodyName = pickField(names, BODY_CANDIDATES);
-  if (bodyName) {
-    const field = fields.find((f) => f.name === bodyName);
-    if (field && isLeafType(field.type)) {
-      caps.bodyField = bodyName;
-    } else {
-      warnings.push(`Ticket.${bodyName} is not a scalar, so it cannot be read as the ticket body.`);
-    }
-  }
+  await assignBodyField(caps, fields, describeType);
 
   if (!caps.createdField) {
     warnings.push('No ticket creation timestamp field found; the poll window cannot be narrowed by age.');
