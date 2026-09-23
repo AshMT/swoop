@@ -4,6 +4,13 @@ import { decrypt } from './crypto';
 import { extractJsonObject } from '../lib/json-extract';
 import { canonicaliseAction } from '../domain/classifications';
 import {
+  canonicaliseCategory,
+  categoryForAction,
+  normaliseImpact,
+  normaliseSentiment,
+  normaliseUrgency,
+} from '../domain/triage';
+import {
   resolveSystemPrompt,
   buildTicketContent,
   promptFingerprint,
@@ -12,7 +19,7 @@ import {
   type TicketPromptInput,
 } from '../prompts/system';
 import { createLogger, describeError } from '../lib/logger';
-import type { AiClassification, Tenant } from '../types';
+import type { AiClassification, AiTriage, Tenant } from '../types';
 
 const log = createLogger('AI');
 
@@ -35,6 +42,16 @@ const rawClassificationSchema = z.object({
   follow_up_question: z.string().nullish(),
   escalation_reason: z.string().nullish(),
   proposed_psa_note: z.string().nullish(),
+  // Triage fields. Optional because an operator's custom prompt may predate
+  // them; the parser fills defaults and says so rather than failing the ticket.
+  category: z.string().nullish(),
+  subcategory: z.string().nullish(),
+  impact: z.string().nullish(),
+  urgency: z.string().nullish(),
+  summary: z.string().nullish(),
+  sentiment: z.string().nullish(),
+  first_response: z.string().nullish(),
+  next_steps: z.union([z.array(z.unknown()), z.string()]).nullish(),
 });
 
 export class AiError extends Error {
@@ -185,7 +202,8 @@ async function callChatCompletions(
     model: aiConfig.model,
     messages,
     temperature: 0.1,
-    max_tokens: 1200,
+    // The triage fields roughly double the answer; 1200 truncated some models.
+    max_tokens: 1800,
   };
   // Supported by OpenAI, Groq and recent Ollama. Providers that do not support
   // it generally 400, which the retry handles by dropping the field.
@@ -322,10 +340,13 @@ export function parseClassification(raw: string): ParseOutcome {
     adjustments.push('The model omitted proposed_psa_note — generated one from the reasoning');
   }
 
+  const triage = parseTriage(data, classification, adjustments);
+
   return {
     ok: true,
     adjustments,
     value: {
+      triage,
       classification,
       confidence,
       sensitivity,
@@ -418,6 +439,41 @@ export function groundEntities(
   }
 
   return { adjustments };
+}
+
+function parseTriage(
+  data: z.infer<typeof rawClassificationSchema>,
+  classification: string,
+  adjustments: string[],
+): AiTriage {
+  let category = canonicaliseCategory(data.category);
+  if (!category) {
+    category = categoryForAction(classification);
+    adjustments.push(
+      data.category
+        ? `Unknown category "${data.category}" — used "${category}"`
+        : `The model gave no category — inferred "${category}" from the action`,
+    );
+  }
+
+  const nextSteps = (Array.isArray(data.next_steps) ? data.next_steps : data.next_steps ? [data.next_steps] : [])
+    .map((step) => (typeof step === 'string' ? cleanString(step) : null))
+    .filter((step): step is string => Boolean(step))
+    .slice(0, 6);
+
+  return {
+    category,
+    subcategory: cleanString(data.subcategory)?.slice(0, 80) ?? null,
+    impact: normaliseImpact(data.impact),
+    urgency: normaliseUrgency(data.urgency),
+    summary:
+      cleanString(data.summary)?.slice(0, 400) ??
+      cleanString(data.reasoning)?.slice(0, 400) ??
+      'No summary was produced.',
+    sentiment: normaliseSentiment(data.sentiment),
+    first_response: cleanString(data.first_response)?.slice(0, 1200) ?? null,
+    next_steps: nextSteps,
+  };
 }
 
 function cleanString(value: string | null | undefined): string | null {

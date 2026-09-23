@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { db } from '../../db';
 import { tenants } from '../../db/schema';
 import { config } from '../../config';
-import { requireAuth } from '../../middleware/auth';
+import { requireAuth, requireRole, type AuthRequest } from '../../middleware/auth';
 import { rateLimit } from '../../middleware/security';
 import { encrypt } from '../../services/crypto';
 import { createPsaClient } from '../../services/psa/factory';
@@ -14,6 +14,11 @@ import { defaultSystemPromptTemplate } from '../../prompts/system';
 import { formatProposalNote, NOTE_FORMATS, isNoteFormat } from '../../services/note-format';
 import { describeError } from '../../lib/logger';
 import type { PublicTenant, Tenant } from '../../types';
+import { isValidTimezone, readTriageSettings, triageSettingsSchema } from '../../services/triage/settings';
+import { approvalPolicySchema, readApprovalPolicy } from '../../services/approvals/policy';
+import { createCippClient } from '../../services/cipp/client';
+import { recordAudit } from '../../services/audit';
+import { CATEGORIES } from '../../domain/triage';
 
 const router = Router();
 
@@ -25,11 +30,12 @@ router.use(requireAuth);
  * own endpoint, so shipping it with every tenant poll is pure waste.
  */
 function toPublic(tenant: Tenant): PublicTenant {
-  const { superopsApiKey, aiApiKey, psaCapabilities: _caps, ...rest } = tenant;
+  const { superopsApiKey, aiApiKey, cippClientSecret, psaCapabilities: _caps, ...rest } = tenant;
   return {
     ...rest,
     hasSuperopsApiKey: Boolean(superopsApiKey),
     hasAiApiKey: Boolean(aiApiKey),
+    hasCippClientSecret: Boolean(cippClientSecret),
   };
 }
 
@@ -64,9 +70,16 @@ const updateSchema = z.object({
   systemPromptOverride: z.string().max(20_000).nullable().optional(),
   // 0 keeps everything; the cap is ten years.
   logRetentionDays: z.number().int().min(0).max(3650).optional(),
+  triageSettings: triageSettingsSchema.optional(),
+  approvalPolicy: approvalPolicySchema.optional(),
+  cippEnabled: z.boolean().optional(),
+  cippApiUrl: z.string().url().max(2048).nullable().optional(),
+  cippTenantId: z.string().max(200).nullable().optional(),
+  cippClientId: z.string().max(200).nullable().optional(),
+  cippClientSecret: z.string().max(4096).nullable().optional(),
 });
 
-router.patch('/:id', async (req, res) => {
+router.patch('/:id', requireRole('admin'), async (req: AuthRequest, res) => {
   const parsed = updateSchema.safeParse(req.body);
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
@@ -81,8 +94,34 @@ router.patch('/:id', async (req, res) => {
   }
 
   const cfg = config();
-  const { superopsApiKey, aiApiKey, systemPromptOverride, ...rest } = parsed.data;
+  const {
+    superopsApiKey,
+    aiApiKey,
+    systemPromptOverride,
+    triageSettings,
+    approvalPolicy,
+    cippClientSecret,
+    ...rest
+  } = parsed.data;
   const updates: Partial<Tenant> = { ...rest };
+
+  if (triageSettings) {
+    if (!isValidTimezone(triageSettings.businessHours.timezone)) {
+      res.status(400).json({ error: `Unknown timezone "${triageSettings.businessHours.timezone}"` });
+      return;
+    }
+    updates.triageSettings = JSON.stringify(triageSettings);
+  }
+  if (approvalPolicy) updates.approvalPolicy = JSON.stringify(approvalPolicy);
+
+  if (cippClientSecret !== undefined) {
+    const trimmed = cippClientSecret?.trim();
+    updates.cippClientSecret = trimmed
+      ? cfg.encryptionEnabled
+        ? encrypt(trimmed, cfg.encryptionKey)
+        : trimmed
+      : null;
+  }
 
   if (superopsApiKey) {
     updates.superopsApiKey = cfg.encryptionEnabled
@@ -117,12 +156,72 @@ router.patch('/:id', async (req, res) => {
 
   await db.update(tenants).set(updates).where(eq(tenants.id, req.params.id));
   const [updated] = await db.select().from(tenants).where(eq(tenants.id, req.params.id)).limit(1);
+
+  // Field names only — never the values, some of which are credentials.
+  await recordAudit({
+    user: req.user,
+    action: 'tenant.update',
+    targetType: 'tenant',
+    targetId: existing.id,
+    tenantId: existing.id,
+    detail: { fields: Object.keys(parsed.data) },
+    req,
+  });
   res.json(toPublic(updated!));
 });
+
+/** Triage settings and approval policy with defaults filled in, for the editor. */
+router.get('/:id/policies', async (req, res) => {
+  const [tenant] = await db
+    .select({ triageSettings: tenants.triageSettings, approvalPolicy: tenants.approvalPolicy })
+    .from(tenants)
+    .where(eq(tenants.id, req.params.id))
+    .limit(1);
+  if (!tenant) {
+    res.status(404).json({ error: 'Tenant not found' });
+    return;
+  }
+  res.json({
+    triageSettings: readTriageSettings(tenant.triageSettings),
+    approvalPolicy: readApprovalPolicy(tenant.approvalPolicy),
+    categories: CATEGORIES,
+  });
+});
+
+/** Checks the CIPP credentials by listing the tenants the client can see. */
+router.post(
+  '/:id/test-cipp',
+  requireRole('admin'),
+  rateLimit({ windowMs: 60_000, max: 10, keyPrefix: 'cipp-test' }),
+  async (req, res) => {
+    const [tenant] = await db.select().from(tenants).where(eq(tenants.id, req.params.id)).limit(1);
+    if (!tenant) {
+      res.status(404).json({ error: 'Tenant not found' });
+      return;
+    }
+    // Test even when the switch is off, so it can be checked before enabling.
+    const client = createCippClient({ ...tenant, cippEnabled: true });
+    if (!client) {
+      res.status(400).json({ ok: false, error: 'Fill in the CIPP URL, tenant ID, client ID and secret first.' });
+      return;
+    }
+    try {
+      const visible = await client.listTenants();
+      res.json({
+        ok: true,
+        tenantCount: visible.length,
+        tenants: visible.slice(0, 200).map((t) => ({ domain: t.defaultDomainName ?? null, name: t.displayName ?? null })),
+      });
+    } catch (err) {
+      res.status(400).json({ ok: false, error: describeError(err) });
+    }
+  },
+);
 
 /** Re-runs the schema probe and reports what it found. */
 router.post(
   '/:id/test-connection',
+  requireRole('admin'),
   rateLimit({ windowMs: 60_000, max: 20, keyPrefix: 'tenant-test' }),
   async (req, res) => {
     const [tenant] = await db.select().from(tenants).where(eq(tenants.id, req.params.id)).limit(1);
@@ -169,6 +268,7 @@ router.get('/:id/capabilities', async (req, res) => {
 /** Runs a poll cycle immediately instead of waiting out the interval. */
 router.post(
   '/:id/poll-now',
+  requireRole('reviewer'),
   rateLimit({ windowMs: 60_000, max: 10, keyPrefix: 'poll-now' }),
   async (req, res) => {
     const [tenant] = await db.select().from(tenants).where(eq(tenants.id, req.params.id)).limit(1);
@@ -238,6 +338,7 @@ router.get('/:id/log-storage', async (req, res) => {
 /** Runs retention now rather than waiting for the six-hourly timer. */
 router.post(
   '/:id/prune-logs',
+  requireRole('admin'),
   rateLimit({ windowMs: 60_000, max: 5, keyPrefix: 'prune-logs' }),
   async (req, res) => {
     const [tenant] = await db.select().from(tenants).where(eq(tenants.id, req.params.id)).limit(1);
@@ -285,6 +386,16 @@ router.get('/:id/note-preview', async (req, res) => {
     follow_up_question: null,
     escalation_reason: null,
     proposed_psa_note: 'Reset the password for sarah.jones@acme.com and send the temporary credential via the agreed channel.',
+    triage: {
+      category: 'identity_access',
+      subcategory: 'Account lockout',
+      impact: 'individual' as const,
+      urgency: 'blocking' as const,
+      summary: 'Sarah Jones is locked out and cannot start work.',
+      sentiment: 'neutral' as const,
+      first_response: "We're resetting Sarah's password now and will send you the temporary one shortly.",
+      next_steps: ['Confirm the requester is authorised', 'Reset the password', 'Check sign-in logs for the lockout cause'],
+    },
   };
 
   res.json({
@@ -295,6 +406,15 @@ router.get('/:id/note-preview', async (req, res) => {
         mspName: tenant.name,
         dryRun: Boolean(tenant.dryRun),
         format: format.id,
+        triage: {
+          priority: 'P3',
+          queue: 'Service desk',
+          signals: [],
+          related: [],
+          duplicateOf: null,
+          approval: { state: 'pending', required: 1 },
+          planBlockers: [],
+        },
       }),
     })),
   });

@@ -1,4 +1,5 @@
 import { findActionType } from '../domain/classifications';
+import { findCategory, PRIORITY_LABELS, isPriority } from '../domain/triage';
 import type { AiClassification } from '../types';
 
 /**
@@ -44,6 +45,18 @@ export interface NoteContext {
   adjustments?: string[];
   /** Defaults to plain text. */
   format?: NoteFormat | null;
+  /** What Swoop added to the model's verdict — omitted in previews. */
+  triage?: NoteTriage | null;
+}
+
+export interface NoteTriage {
+  priority: string;
+  queue: string;
+  signals: Array<{ label: string; detail: string; severity: string }>;
+  related: Array<{ label: string; similarity: number }>;
+  duplicateOf: string | null;
+  approval: { state: string; required: number } | null;
+  planBlockers: string[];
 }
 
 /** The note as structure, before it is rendered into a particular format. */
@@ -54,8 +67,8 @@ interface NoteModel {
   facts: Array<{ label: string; value: string }>;
   /** Longer sections, each a heading and a paragraph. */
   sections: Array<{ heading: string; body: string }>;
-  /** Bulleted detail, e.g. the extracted entities. */
-  bullets: { heading: string; items: string[] } | null;
+  /** Bulleted lists, e.g. next steps and the extracted entities. */
+  lists: Array<{ heading: string; items: string[] }>;
   /** The standing disclaimer, always last. */
   footer: string;
 }
@@ -64,41 +77,91 @@ function buildModel(classification: AiClassification, context: NoteContext): Not
   const action = findActionType(classification.classification);
   const isEscalation = classification.classification === 'ESCALATE';
   const isFollowUp = classification.classification === 'FOLLOW_UP';
+  const triage = classification.triage;
+  const extra = context.triage ?? null;
 
   const sections: NoteModel['sections'] = [];
+  const lists: NoteModel['lists'] = [];
   let verdictLabel: string;
 
   if (isEscalation) {
-    verdictLabel = 'Escalate to a human';
-    if (classification.escalation_reason) {
-      sections.push({ heading: 'Reason', body: classification.escalation_reason });
-    }
+    verdictLabel = 'For a technician';
   } else if (isFollowUp) {
     verdictLabel = 'More information needed from the requester';
-    if (classification.follow_up_question) {
-      sections.push({ heading: 'Suggested question', body: classification.follow_up_question });
-    }
   } else {
     verdictLabel = `Proposed action: ${action?.label ?? classification.classification}`;
   }
 
+  if (triage?.summary) sections.push({ heading: 'Summary', body: triage.summary });
+
+  if (isEscalation && classification.escalation_reason) {
+    sections.push({ heading: 'Why a technician', body: classification.escalation_reason });
+  }
+  if (isFollowUp && classification.follow_up_question) {
+    sections.push({ heading: 'Suggested question', body: classification.follow_up_question });
+  }
+
+  if (extra && extra.signals.length > 0) {
+    lists.push({
+      heading: 'Flags',
+      items: extra.signals.map((signal) => `${signal.label}: ${signal.detail}`),
+    });
+  }
+
   sections.push({ heading: 'Reasoning', body: classification.reasoning });
 
-  if (!isEscalation && !isFollowUp) {
+  if (triage && triage.next_steps.length > 0) {
+    lists.push({ heading: 'Next steps', items: triage.next_steps });
+  } else if (!isEscalation && !isFollowUp) {
     sections.push({ heading: 'Suggested next step', body: classification.proposed_psa_note });
+  }
+
+  if (triage?.first_response) {
+    sections.push({ heading: 'Suggested reply to the requester', body: triage.first_response });
+  }
+
+  if (extra?.approval && extra.approval.state !== 'not_required') {
+    const approvalText =
+      extra.approval.state === 'auto_approved'
+        ? 'Auto-approved under this tenant\'s policy. A technician carries out the plan; Swoop does not.'
+        : extra.approval.state === 'pending'
+          ? `Waiting for ${extra.approval.required === 2 ? 'two approvals' : 'one approval'} in Swoop before anyone acts on it.`
+          : `Approval ${extra.approval.state.replace('_', ' ')}.`;
+    sections.push({ heading: 'Approval', body: approvalText });
+  }
+  if (extra && extra.planBlockers.length > 0) {
+    lists.push({ heading: 'Before this can be done', items: extra.planBlockers });
+  }
+
+  if (extra && (extra.duplicateOf || extra.related.length > 0)) {
+    const items = extra.related.map((r) => `${r.label} (${Math.round(r.similarity * 100)}% similar)`);
+    lists.push({ heading: extra.duplicateOf ? `Possible duplicate of ${extra.duplicateOf}` : 'Related tickets', items });
   }
 
   if (context.adjustments && context.adjustments.length > 0) {
     sections.push({
-      heading: 'Notes on this classification',
+      heading: 'Notes on this triage',
       body: `${context.adjustments.join('; ')}.`,
     });
   }
 
-  const facts: NoteModel['facts'] = [
+  const facts: NoteModel['facts'] = [];
+  if (extra && isPriority(extra.priority)) {
+    facts.push({ label: 'Priority', value: `${extra.priority} ${PRIORITY_LABELS[extra.priority]}` });
+  }
+  if (triage) {
+    const category = findCategory(triage.category)?.label ?? triage.category;
+    facts.push({
+      label: 'Category',
+      value: triage.subcategory ? `${category} / ${triage.subcategory}` : category,
+    });
+  }
+  if (extra?.queue) facts.push({ label: 'Queue', value: extra.queue });
+  facts.push(
     { label: 'Confidence', value: `${Math.round(classification.confidence * 100)}%` },
     { label: 'Sensitivity', value: classification.sensitivity },
-  ];
+  );
+  if (triage && triage.sentiment !== 'neutral') facts.push({ label: 'Tone', value: triage.sentiment });
   if (classification.sensitivity === 'high') {
     facts.push({
       label: 'Approval',
@@ -107,13 +170,19 @@ function buildModel(classification: AiClassification, context: NoteContext): Not
   }
 
   const items = describeEntities(classification);
+  if (items.length > 0) lists.push({ heading: 'Details extracted from the ticket', items });
 
   return {
-    title: `Swoop AI triage — ${context.mspName}`,
-    verdict: { label: verdictLabel, emphasis: isEscalation || classification.sensitivity === 'high' },
+    title: `Swoop triage — ${context.mspName}`,
+    verdict: {
+      label: verdictLabel,
+      emphasis:
+        classification.sensitivity === 'high' ||
+        (extra ? extra.priority === 'P1' || extra.priority === 'P2' : isEscalation),
+    },
     facts,
     sections,
-    bullets: items.length > 0 ? { heading: 'Details extracted from the ticket', items } : null,
+    lists,
     footer: context.dryRun
       ? 'Swoop is in read-only preview mode. Nothing has been changed and no action has been taken.'
       : 'Swoop proposes actions only. Nothing has been changed and no action has been taken.',
@@ -141,9 +210,9 @@ function renderPlain(model: NoteModel): string {
     lines.push('', `${section.heading}: ${section.body}`);
   }
 
-  if (model.bullets) {
-    lines.push('', `${model.bullets.heading}:`);
-    lines.push(...model.bullets.items.map((item) => `  ${item}`));
+  for (const list of model.lists) {
+    lines.push('', `${list.heading}:`);
+    lines.push(...list.items.map((item) => `  - ${item}`));
   }
 
   lines.push('', '---', model.footer);
@@ -170,9 +239,9 @@ function renderMarkdown(model: NoteModel): string {
     lines.push('', `**${escapeMarkdown(section.heading)}**`, '', escapeMarkdown(section.body));
   }
 
-  if (model.bullets) {
-    lines.push('', `**${escapeMarkdown(model.bullets.heading)}**`, '');
-    lines.push(...model.bullets.items.map((item) => `- ${escapeMarkdown(item)}`));
+  for (const list of model.lists) {
+    lines.push('', `**${escapeMarkdown(list.heading)}**`, '');
+    lines.push(...list.items.map((item) => `- ${escapeMarkdown(item)}`));
   }
 
   lines.push('', '---', '', `_${escapeMarkdown(model.footer)}_`);
@@ -198,9 +267,9 @@ function renderHtml(model: NoteModel): string {
     parts.push(`<p><strong>${escapeHtml(section.heading)}</strong><br>${escapeHtml(section.body)}</p>`);
   }
 
-  if (model.bullets) {
-    parts.push(`<p><strong>${escapeHtml(model.bullets.heading)}</strong></p>`);
-    parts.push(`<ul>${model.bullets.items.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`);
+  for (const list of model.lists) {
+    parts.push(`<p><strong>${escapeHtml(list.heading)}</strong></p>`);
+    parts.push(`<ul>${list.items.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`);
   }
 
   parts.push('<hr>');

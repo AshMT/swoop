@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { db } from '../db';
 import { users, tenants, clients } from '../db/schema';
 import { config } from '../config';
-import { signToken, requireAuth } from '../middleware/auth';
+import { signToken, requireAuth, requireRole } from '../middleware/auth';
 import { rateLimit } from '../middleware/security';
 import { encrypt } from '../services/crypto';
 import { SuperOpsClient } from '../services/psa/superops';
@@ -84,12 +84,14 @@ router.post(
     }
 
     log.info(`Created the admin account for ${email}`);
-    res.json({ token: signToken({ userId: id, email }), email });
+    res.json({ token: signToken({ userId: id, email, tv: 0 }), email, role: 'admin' });
   },
 );
 
 // ─── Everything below requires the token from step 1 ─────────────────────────
 router.use(requireAuth);
+// Setup reconfigures the install, so only an admin may use it after first run.
+router.use(requireRole('admin'));
 
 /**
  * Connection tests take an operator-supplied URL, so they are an outbound

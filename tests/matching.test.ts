@@ -185,7 +185,7 @@ describe('formatProposalNote', () => {
       { ...base, classification: 'ESCALATE', escalation_reason: 'Out of scope' },
       { mspName: 'MightyIT' },
     );
-    expect(note).toMatch(/escalate to a human/i);
+    expect(note).toMatch(/for a technician/i);
     expect(note).toContain('Out of scope');
   });
 

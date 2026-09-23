@@ -11,6 +11,8 @@ import tenantsRoutes from './routes/api/tenants';
 import clientsRoutes from './routes/api/clients';
 import actionsRoutes from './routes/api/actions';
 import systemRoutes from './routes/api/system';
+import usersRoutes from './routes/api/users';
+import incidentsRoutes from './routes/api/incidents';
 import { pollerStatus, startPoller, stopPoller } from './services/poller';
 import { APP_VERSION } from './version';
 
@@ -92,6 +94,8 @@ export function createApp(): express.Express {
   app.use('/api/clients', clientsRoutes);
   app.use('/api/actions', actionsRoutes);
   app.use('/api/system', systemRoutes);
+  app.use('/api/users', usersRoutes);
+  app.use('/api/incidents', incidentsRoutes);
 
   // An unknown API path must be a JSON 404. The previous catch-all served
   // index.html for these, so a typo'd endpoint returned 200 and a page of HTML

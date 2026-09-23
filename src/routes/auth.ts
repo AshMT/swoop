@@ -1,9 +1,12 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
-import { eq } from 'drizzle-orm';
+import { and, eq, gt, isNull } from 'drizzle-orm';
+import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
 import { db } from '../db';
-import { users } from '../db/schema';
+import { invites, users } from '../db/schema';
+import { hashInviteToken } from './api/users';
+import { recordAudit } from '../services/audit';
 import { requireAuth, signToken, type AuthRequest } from '../middleware/auth';
 import { rateLimit } from '../middleware/security';
 import { createLogger } from '../lib/logger';
@@ -47,19 +50,35 @@ router.post(
       res.status(401).json({ error: 'Invalid email or password' });
       return;
     }
+    if (user.disabled) {
+      // Only said after a correct password, so it reveals nothing to a guesser.
+      log.warn(`Sign-in refused for disabled account ${email}`);
+      res.status(403).json({ error: 'This account has been disabled. Ask an admin to re-enable it.' });
+      return;
+    }
 
     await db
       .update(users)
       .set({ lastLoginAt: Math.floor(Date.now() / 1000) })
       .where(eq(users.id, user.id));
 
-    res.json({ token: signToken({ userId: user.id, email: user.email }), email: user.email });
+    res.json({
+      token: signToken({ userId: user.id, email: user.email, tv: user.tokenVersion ?? 0 }),
+      email: user.email,
+      role: user.role,
+    });
   },
 );
 
 router.get('/me', requireAuth, async (req: AuthRequest, res) => {
   const [user] = await db
-    .select({ id: users.id, email: users.email, role: users.role, lastLoginAt: users.lastLoginAt })
+    .select({
+      id: users.id,
+      email: users.email,
+      role: users.role,
+      displayName: users.displayName,
+      lastLoginAt: users.lastLoginAt,
+    })
     .from(users)
     .where(eq(users.id, req.user!.userId))
     .limit(1);
@@ -95,21 +114,116 @@ router.post('/change-password', requireAuth, async (req: AuthRequest, res) => {
     return;
   }
 
+  // Bumping the token version signs out every other session: a password is
+  // usually changed because someone else might know it.
+  const tokenVersion = (user.tokenVersion ?? 0) + 1;
   await db
     .update(users)
-    .set({ passwordHash: await bcrypt.hash(parsed.data.newPassword, BCRYPT_ROUNDS) })
+    .set({ passwordHash: await bcrypt.hash(parsed.data.newPassword, BCRYPT_ROUNDS), tokenVersion })
     .where(eq(users.id, user.id));
 
   log.info(`Password changed for ${user.email}`);
-  // Tokens are stateless, so existing ones stay valid until they expire. Say so
-  // rather than implying every session was revoked.
-  res.json({ ok: true, note: 'Existing sessions remain valid until their tokens expire.' });
+  await recordAudit({ user: req.user, action: 'user.password_change', targetType: 'user', targetId: user.id, req });
+  res.json({
+    ok: true,
+    token: signToken({ userId: user.id, email: user.email, tv: tokenVersion }),
+    note: 'Every other session has been signed out.',
+  });
+});
+
+/** Signs out every session for this account, including this one. */
+router.post('/logout-everywhere', requireAuth, async (req: AuthRequest, res) => {
+  const [user] = await db.select({ tokenVersion: users.tokenVersion }).from(users).where(eq(users.id, req.user!.userId)).limit(1);
+  await db
+    .update(users)
+    .set({ tokenVersion: (user?.tokenVersion ?? 0) + 1 })
+    .where(eq(users.id, req.user!.userId));
+  await recordAudit({ user: req.user, action: 'user.logout_everywhere', targetType: 'user', targetId: req.user!.userId, req });
+  res.json({ ok: true });
 });
 
 router.post('/logout', (_req, res) => {
-  // Stateless JWTs: the client discards the token. Kept so the SPA has a
-  // single place to call, and so revocation can be added here later.
+  // The client discards its token; use /logout-everywhere to revoke them all.
   res.json({ ok: true });
+});
+
+// ─── Invitations ───────────────────────────────────────────────────────────────
+
+const inviteLimit = rateLimit({
+  windowMs: 15 * 60_000,
+  max: 20,
+  keyPrefix: 'invite-accept',
+  message: 'Too many attempts. Try again in a few minutes.',
+});
+
+async function findLiveInvite(token: string) {
+  if (!/^[A-Za-z0-9_-]{20,100}$/.test(token)) return null;
+  const now = Math.floor(Date.now() / 1000);
+  const [invite] = await db
+    .select()
+    .from(invites)
+    .where(
+      and(
+        eq(invites.tokenHash, hashInviteToken(token)),
+        isNull(invites.acceptedAt),
+        isNull(invites.revokedAt),
+        gt(invites.expiresAt, now),
+      ),
+    )
+    .limit(1);
+  return invite ?? null;
+}
+
+/** What the invitation page shows before the person sets a password. */
+router.get('/invite/:token', inviteLimit, async (req, res) => {
+  const invite = await findLiveInvite(req.params.token);
+  if (!invite) {
+    res.status(404).json({ error: 'This invitation link is invalid, expired or already used.' });
+    return;
+  }
+  res.json({ email: invite.email, role: invite.role, expiresAt: invite.expiresAt });
+});
+
+const acceptSchema = z.object({
+  token: z.string().min(20).max(100),
+  password: z.string().min(12, 'Password must be at least 12 characters').max(200),
+  displayName: z.string().max(120).optional(),
+});
+
+router.post('/accept-invite', inviteLimit, async (req, res) => {
+  const parsed = acceptSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Invalid request' });
+    return;
+  }
+  const invite = await findLiveInvite(parsed.data.token);
+  if (!invite) {
+    res.status(404).json({ error: 'This invitation link is invalid, expired or already used.' });
+    return;
+  }
+
+  const id = uuidv4();
+  const now = Math.floor(Date.now() / 1000);
+  try {
+    await db.insert(users).values({
+      id,
+      email: invite.email,
+      passwordHash: await bcrypt.hash(parsed.data.password, BCRYPT_ROUNDS),
+      role: invite.role,
+      displayName: parsed.data.displayName?.trim() || null,
+      invitedBy: invite.createdBy,
+      lastLoginAt: now,
+    });
+  } catch {
+    res.status(409).json({ error: `${invite.email} already has an account. Sign in instead.` });
+    return;
+  }
+  await db.update(invites).set({ acceptedAt: now }).where(eq(invites.id, invite.id));
+
+  const sessionUser = { userId: id, email: invite.email, role: invite.role, displayName: parsed.data.displayName ?? null };
+  await recordAudit({ user: sessionUser, action: 'user.invite_accept', targetType: 'user', targetId: id, detail: { role: invite.role }, req });
+  log.info(`${invite.email} accepted an invitation as ${invite.role}`);
+  res.json({ token: signToken({ userId: id, email: invite.email, tv: 0 }), email: invite.email, role: invite.role });
 });
 
 export default router;
