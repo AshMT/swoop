@@ -28,6 +28,9 @@ services:
       AI_MODEL: ${AI_MODEL:-}
       AI_TIMEOUT_MS: ${AI_TIMEOUT_MS:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      # The user the app runs as. Unraid: 99 / 100. Most Linux hosts: 1000 / 1000.
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
       LOG_FORMAT: ${LOG_FORMAT:-}
       # Set to 1 only when Swoop sits behind a reverse proxy you control.
       TRUST_PROXY: ${TRUST_PROXY:-}

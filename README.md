@@ -66,6 +66,22 @@ Open <http://localhost:3000> and follow the setup wizard.
 
 > Swoop **refuses to start** in production without `ENCRYPTION_KEY` and `JWT_SECRET`. A container that exits with a clear message is safer than one running on a default secret, so it tells you exactly what is missing and stops.
 
+### Unraid
+
+Add the container from the Docker tab with these settings:
+
+| Setting | Value |
+|---|---|
+| Repository | `ghcr.io/ashmt/swoop:latest` |
+| Port | `3000` → any free host port |
+| Path | `/app/data` → `/mnt/user/appdata/swoop` |
+| Variable `PUID` | `99` |
+| Variable `PGID` | `100` |
+| Variable `ENCRYPTION_KEY` | output of `openssl rand -hex 32` |
+| Variable `JWT_SECRET` | output of `openssl rand -hex 32` (at least 32 characters) |
+
+The container starts as root only long enough to make `/app/data` owned by `PUID:PGID`, then drops to that user before starting Swoop. That means an existing appdata folder with the wrong ownership is fixed automatically on start. You will not see `attempt to write a readonly database` after an upgrade.
+
 ### Without Docker
 
 Requires Node.js 20 or newer.
@@ -200,7 +216,7 @@ Under **Settings → Behaviour**:
 - The only unauthenticated endpoints are `/health`, `/api/setup/status`, and first-run admin creation, which works exactly once.
 - Ticket text is treated as untrusted input: it is fenced and labelled in the prompt, and the model is instructed to ignore instructions inside it.
 - CSV exports are protected against formula injection.
-- The container runs unprivileged with `no-new-privileges`.
+- The container starts as root only to fix data-folder ownership, then drops to `PUID:PGID` before Swoop starts; the app never runs as root, and `PUID=0` is refused.
 
 To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
@@ -224,6 +240,7 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
 | `TRUST_PROXY` | no | off | Enable only behind a proxy you control |
 | `CORS_ORIGIN` | no | — | For frontend development only |
 | `SUPEROPS_API_URL` | no | — | Override the endpoint, e.g. an egress proxy |
+| `PUID` / `PGID` | no | `1000` / `1000` | User the app runs as in the container. Unraid: `99` / `100` |
 
 Anything configured through the UI is stored encrypted and takes precedence over the environment.
 
