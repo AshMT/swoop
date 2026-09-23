@@ -647,6 +647,7 @@ export interface ConnectionTestResult {
   endpoint?: string;
   error?: string;
   capabilities?: PsaCapabilities;
+  bodyCheck?: { ticket: string; characters: number; preview: string } | { ticket: string | null; error: string };
 }
 
 export interface PollSummary {

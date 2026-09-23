@@ -76,6 +76,33 @@ describe('probeCapabilities', () => {
     }
   });
 
+  it('reads a fully wrapped list return type', async () => {
+    const caps = await probe({ bodyField: null, conversations: 'deep' });
+    expect(caps).toMatchObject({ conversationQuery: 'getTicketConversationList', conversationContentField: 'content' });
+  });
+
+  it('uses the documented shape when the entry type cannot be introspected', async () => {
+    const caps = await probe({ bodyField: null, conversations: 'opaque' });
+    expect(caps).toMatchObject({
+      conversationQuery: 'getTicketConversationList',
+      conversationArgIdField: 'ticketId',
+      conversationContentField: 'content',
+      conversationTimeField: 'time',
+    });
+    expect(caps.warnings.join(' ')).not.toMatch(/subject line only/i);
+  });
+
+  it('says why a conversation query it found could not be used', async () => {
+    const caps = await probe({ bodyField: null, conversations: 'textless' });
+    expect(caps.conversationQuery).toBeNull();
+    expect(caps.warnings.join(' ')).toMatch(/found getTicketConversationList but its entries \(BareConversation\) have no text field/);
+  });
+
+  it('lists the schema’s ticket queries when it finds no conversation query', async () => {
+    const caps = await probe({ bodyField: null });
+    expect(caps.warnings.join(' ')).toMatch(/ticket queries on this schema: getTicketList, getTicket/);
+  });
+
   it('prefers a body on the ticket over the conversation thread', async () => {
     const caps = await probe({ conversations: 'list' });
     expect(caps.bodyField).toBe('description');
@@ -366,5 +393,42 @@ describe('reading the ticket body', () => {
       throw new Error('Field required: listInfo');
     });
     expect((await client.enrichTicket({ ...bare })).body).toBe('');
+  });
+
+  it('proves the body source on the newest ticket during the connection test', async () => {
+    const { SuperOpsClient } = await import('../src/services/psa/superops');
+    const introspection = fakeGraphQLClient(buildFakeSchema({ bodyField: null, conversations: 'list' }));
+    const client = new SuperOpsClient({ subdomain: 'msp', apiKey: 'k' });
+    (client as unknown as { client: { request: (req: unknown, vars?: Record<string, unknown>) => Promise<unknown> } }).client = {
+      // The probe calls request(document, variables); reads call request({ document, variables }).
+      request: async (req, vars) => {
+        const { document, variables } = typeof req === 'string' ? { document: req, variables: vars } : (req as { document: string; variables?: Record<string, unknown> });
+        if (document.includes('SwoopTicketList')) return { getTicketList: { tickets: [{ ticketId: 'T-9', displayId: '1009', subject: 'VPN down' }] } };
+        if (document.includes('SwoopTicketConversations')) {
+          expect(document).toContain('ticketId: "T-9"');
+          return { getTicketConversationList: [{ content: '<p>The VPN will not connect since this morning.</p>', time: '2026-09-23T08:00:00Z' }] };
+        }
+        return introspection.request(document, variables);
+      },
+    };
+    const result = await client.testConnection();
+    expect(result.bodyCheck).toEqual({ ticket: '#1009', characters: 44, preview: 'The VPN will not connect since this morning.' });
+  });
+
+  it('reports a body source that fails on real data', async () => {
+    const { SuperOpsClient } = await import('../src/services/psa/superops');
+    const introspection = fakeGraphQLClient(buildFakeSchema({ bodyField: null, conversations: 'list' }));
+    const client = new SuperOpsClient({ subdomain: 'msp', apiKey: 'k' });
+    (client as unknown as { client: { request: (req: unknown, vars?: Record<string, unknown>) => Promise<unknown> } }).client = {
+      // The probe calls request(document, variables); reads call request({ document, variables }).
+      request: async (req, vars) => {
+        const { document, variables } = typeof req === 'string' ? { document: req, variables: vars } : (req as { document: string; variables?: Record<string, unknown> });
+        if (document.includes('SwoopTicketList')) return { getTicketList: { tickets: [{ ticketId: 'T-9', displayId: '1009' }] } };
+        if (document.includes('SwoopTicketConversations')) throw new Error('Not authorised to read conversations');
+        return introspection.request(document, variables);
+      },
+    };
+    const result = await client.testConnection();
+    expect(result.bodyCheck).toMatchObject({ ticket: '#1009', error: expect.stringMatching(/Not authorised/) });
   });
 });
