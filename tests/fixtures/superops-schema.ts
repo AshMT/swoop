@@ -64,6 +64,11 @@ export interface SchemaOptions {
   conversations?: 'list' | 'wrapped' | 'none' | 'deep' | 'opaque' | 'textless';
   /** Put the body inside an object, as description { content }. */
   bodyObject?: boolean;
+  /**
+   * Add getTicketConversation(input: TicketConversationIdentifierInput!), which
+   * fetches one message by its own id — the look-alike a real EU schema has.
+   */
+  singleConversation?: boolean;
 }
 
 export function buildFakeSchema(options: SchemaOptions = {}): FakeSchema {
@@ -76,6 +81,7 @@ export function buildFakeSchema(options: SchemaOptions = {}): FakeSchema {
     clientList = 'wrapped',
     conversations = 'none',
     bodyObject = false,
+    singleConversation = false,
   } = options;
 
   const ticketFields: FakeField[] = [
@@ -231,6 +237,19 @@ export function buildFakeSchema(options: SchemaOptions = {}): FakeSchema {
       type: object('Ticket'),
       args: [{ name: 'input', type: nonNull(input('TicketIdentifierInput')) }],
     });
+  }
+
+  if (singleConversation) {
+    queryFields.push({
+      name: 'getTicketConversation',
+      type: object('TicketConversation'),
+      args: [{ name: 'input', type: nonNull(input('TicketConversationIdentifierInput')) }],
+    });
+    types.TicketConversationIdentifierInput = {
+      name: 'TicketConversationIdentifierInput',
+      kind: 'INPUT_OBJECT',
+      inputFields: [{ name: 'conversationId', type: nonNull(scalar('ID')) }],
+    };
   }
 
   if (conversations !== 'none') {

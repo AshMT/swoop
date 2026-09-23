@@ -95,12 +95,26 @@ describe('probeCapabilities', () => {
   it('says why a conversation query it found could not be used', async () => {
     const caps = await probe({ bodyField: null, conversations: 'textless' });
     expect(caps.conversationQuery).toBeNull();
-    expect(caps.warnings.join(' ')).toMatch(/found getTicketConversationList but its entries \(BareConversation\) have no text field/);
+    expect(caps.warnings.join(' ')).toMatch(/passed over getTicketConversationList \(its entries have no text field \(has: conversationId\)\)/);
   });
 
   it('lists the schema’s ticket queries when it finds no conversation query', async () => {
     const caps = await probe({ bodyField: null });
-    expect(caps.warnings.join(' ')).toMatch(/ticket queries on this schema: getTicketList, getTicket/);
+    expect(caps.warnings.join(' ')).toMatch(/Ticket queries on this schema: getTicketList, getTicket\./);
+  });
+
+  // A real EU schema: getTicketConversation fetches one message by its own id.
+  it('passes over a single-message lookup and says why', async () => {
+    const caps = await probe({ bodyField: null, singleConversation: true });
+    expect(caps.conversationQuery).toBeNull();
+    const warning = caps.warnings.join(' ');
+    expect(warning).toMatch(/passed over getTicketConversation \(needs conversationId, not a ticket id\)/);
+    expect(warning).toMatch(/Ticket queries on this schema: getTicketList, getTicket, getTicketConversation\./);
+  });
+
+  it('uses the ticket thread when a single-message lookup sits beside it', async () => {
+    const caps = await probe({ bodyField: null, singleConversation: true, conversations: 'list' });
+    expect(caps).toMatchObject({ conversationQuery: 'getTicketConversationList', conversationArgIdField: 'ticketId' });
   });
 
   it('prefers a body on the ticket over the conversation thread', async () => {

@@ -13,7 +13,7 @@ import { createLogger, describeError } from '../../lib/logger';
 const log = createLogger('SuperOps:probe');
 
 /** Version stamp — bump to force a re-probe after changing the probe logic. */
-export const CAPABILITIES_VERSION = 6;
+export const CAPABILITIES_VERSION = 7;
 
 export interface ObjectFieldShape {
   /** 'leaf' needs no sub-selection; 'object' does; 'missing' means absent. */
@@ -404,12 +404,11 @@ export async function probeCapabilities(
 
   if (!caps.bodyField && !caps.conversationQuery) {
     const seen = caps.ticketFields.length ? ` Ticket fields: ${caps.ticketFields.join(', ')}.` : '';
-    const ticketQueries = queryFields.map((f) => f.name).filter((n) => /ticket/i.test(n));
+    const ticketQueries = queryFields.map((f) => f.name).filter((n) => /ticket|conversation|thread/i.test(n));
     const conversation =
-      caps.conversationNote ??
-      `no conversation query (looked for: ${CONVERSATION_QUERY_CANDIDATES.slice(0, 2).join(', ')}; ticket queries on this schema: ${ticketQueries.join(', ') || 'none'})`;
+      caps.conversationNote ?? `no conversation query (looked for: ${CONVERSATION_QUERY_CANDIDATES.slice(0, 2).join(', ')})`;
     warnings.push(
-      `No ticket body found — no body field on the ticket (looked for: ${BODY_CANDIDATES.slice(0, 5).join(', ')}) and ${conversation}. Classification will use the subject line only, which measurably reduces accuracy.${seen}`,
+      `No ticket body found — no body field on the ticket (looked for: ${BODY_CANDIDATES.slice(0, 5).join(', ')}) and ${conversation}. Classification will use the subject line only, which measurably reduces accuracy. Ticket queries on this schema: ${ticketQueries.join(', ') || 'none'}.${seen}`,
     );
   }
 
@@ -547,35 +546,74 @@ async function assignBodyField(
  * Finds a per-ticket conversation query and the text and time fields on its
  * entries. SuperOps documents it as
  * `getTicketConversationList(input: TicketIdentifierInput!): [TicketConversation]`
- * with `content` and `time` strings; when introspection cannot confirm part of
- * that for the documented query, the documented shape is used rather than
- * giving up, and anything else unresolved is recorded in `conversationNote`.
+ * with `content` and `time` strings, but schemas also carry look-alikes such as
+ * `getTicketConversation(input: TicketConversationIdentifierInput!)`, which
+ * fetches one message by its own id and is no use here. Every candidate is
+ * tried, lists first; the first that can be addressed by ticket id and has a
+ * text field wins, and the reason each other one was passed over is recorded.
  */
 async function resolveConversation(
   caps: PsaCapabilities,
   queryFields: FieldInfo[],
   describeType: (name: string) => Promise<TypeResponse['__type']>,
 ): Promise<void> {
-  const field =
-    findRootField(queryFields, CONVERSATION_QUERY_CANDIDATES) ??
-    queryFields.find((f) => /^get\w*ticket\w*(conversation|thread)\w*$/i.test(f.name)) ??
-    null;
-  if (!field) return;
-  const documented = field.name === 'getTicketConversationList';
-  const fail = (why: string) => {
-    caps.conversationNote = `found ${field.name} but ${why}`;
+  const candidates: FieldInfo[] = [];
+  const add = (field: FieldInfo | null | undefined) => {
+    if (field && !candidates.includes(field)) candidates.push(field);
   };
+  for (const name of CONVERSATION_QUERY_CANDIDATES) add(findRootField(queryFields, [name]));
+  for (const field of queryFields) {
+    if (/ticket\w*(conversation|thread|repl)|(conversation|thread)\w*ticket/i.test(field.name)) add(field);
+  }
+  // A query returning a list, or named like one, is far likelier to be the thread.
+  const listish = (f: FieldInfo) => isListType(f.type) || /(list|s)$/i.test(f.name);
+  candidates.sort((a, b) => Number(listish(b)) - Number(listish(a)));
 
+  const passedOver: string[] = [];
+  for (const field of candidates) {
+    const outcome = await tryConversationQuery(field, describeType);
+    if ('reason' in outcome) {
+      passedOver.push(`${field.name} (${outcome.reason})`);
+      continue;
+    }
+    Object.assign(caps, outcome, { conversationNote: null });
+    return;
+  }
+  if (passedOver.length > 0) caps.conversationNote = `no usable conversation query — passed over ${passedOver.join('; ')}`;
+}
+
+async function tryConversationQuery(
+  field: FieldInfo,
+  describeType: (name: string) => Promise<TypeResponse['__type']>,
+): Promise<
+  | { reason: string }
+  | Pick<
+      PsaCapabilities,
+      | 'conversationQuery'
+      | 'conversationArgName'
+      | 'conversationArgIdField'
+      | 'conversationResultField'
+      | 'conversationContentField'
+      | 'conversationTimeField'
+    >
+> {
+  const documented = field.name === 'getTicketConversationList';
   const arg = field.args?.[0];
-  if (!arg) return fail('it takes no argument to name the ticket');
+  if (!arg) return { reason: 'takes no argument' };
 
+  // It must be addressed by the ticket's id, not by a message's own id.
   let argIdField: string | null = null;
   if (namedType(arg.type).kind === 'INPUT_OBJECT') {
     const argTypeName = namedType(arg.type).name;
     const argType = argTypeName ? await describeType(argTypeName) : null;
     const argFields = (argType?.inputFields ?? []).map((f) => f.name);
-    argIdField = pickField(argFields, ID_CANDIDATES) ?? (documented && argFields.length === 0 ? 'ticketId' : null);
-    if (!argIdField) return fail(`its input ${argTypeName ?? '(unnamed)'} has no ticket id field (has: ${argFields.join(', ') || 'nothing readable'})`);
+    argIdField =
+      pickField(argFields, ['ticketId', 'ticketID', 'workId']) ??
+      (argTypeName && /ticket/i.test(argTypeName) && !/conversation|thread/i.test(argTypeName) ? pickField(argFields, ['id']) : null) ??
+      (documented && argFields.length === 0 ? 'ticketId' : null);
+    if (!argIdField) return { reason: `needs ${argFields.join(', ') || 'an input it could not read'}, not a ticket id` };
+  } else if (!/ticket|workid/i.test(arg.name)) {
+    return { reason: `needs ${arg.name}, not a ticket id` };
   }
 
   // Either the query returns the entries directly, or a wrapper holding them.
@@ -587,7 +625,7 @@ async function resolveConversation(
     const arrayField =
       wrapperFields.find((f) => CONVERSATION_RESULT_CANDIDATES.includes(f.name)) ??
       wrapperFields.find((f) => !isLeafType(f.type) && isListType(f.type));
-    if (!arrayField) return fail(`its result ${entryTypeName} holds no list of entries`);
+    if (!arrayField) return { reason: `returns a single ${entryTypeName}, not a list` };
     resultField = arrayField.name;
     entryTypeName = namedType(arrayField.type).name;
   }
@@ -600,17 +638,16 @@ async function resolveConversation(
     content = 'content';
     time = 'time';
   }
-  if (!content) {
-    return fail(`its entries (${entryTypeName ?? 'unreadable type'}) have no text field (scalars: ${scalars.join(', ') || 'none readable'})`);
-  }
+  if (!content) return { reason: `its entries have no text field (has: ${scalars.join(', ') || 'nothing readable'})` };
 
-  caps.conversationQuery = field.name;
-  caps.conversationArgName = arg.name;
-  caps.conversationArgIdField = argIdField;
-  caps.conversationResultField = resultField;
-  caps.conversationContentField = content;
-  caps.conversationTimeField = time;
-  caps.conversationNote = null;
+  return {
+    conversationQuery: field.name,
+    conversationArgName: arg.name,
+    conversationArgIdField: argIdField,
+    conversationResultField: resultField,
+    conversationContentField: content,
+    conversationTimeField: time,
+  };
 }
 
 /** Where the ticket text comes from, for the UI. Null when nowhere. */
