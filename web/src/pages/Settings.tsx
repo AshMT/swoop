@@ -12,6 +12,7 @@ import {
   getNotePreview,
   getSystemStatus,
   getTenants,
+  bodySource,
   pruneLogs,
   testAi,
   testSuperOps,
@@ -299,7 +300,7 @@ function ConnectionResult({ result }: { result: ConnectionTestResult }) {
             </li>
             <li>
               Ticket body:{' '}
-              {caps.bodyField ? <code>{caps.bodyField}</code> : <span className="font-medium">not found</span>}
+              {bodySource(caps) ? <code>{bodySource(caps)}</code> : <span className="font-medium">not found</span>}
             </li>
             <li>
               Note mutation:{' '}
@@ -977,9 +978,14 @@ function CapabilityTable({ caps, probedAt }: { caps: PsaCapabilities; probedAt?:
         <Field label="Ticket detail query">
           <Code value={caps.detailQuery} />
         </Field>
-        <Field label="Ticket body field">
-          <Code value={caps.bodyField} missingLabel="not found — classification uses the subject only" />
+        <Field label="Ticket body">
+          <Code value={bodySource(caps)} missingLabel="not found — classification uses the subject only" />
         </Field>
+        {caps.ticketFields && caps.ticketFields.length > 0 && (
+          <Field label="Ticket fields">
+            <span className="break-words font-mono text-xs text-slate-500">{caps.ticketFields.join(', ')}</span>
+          </Field>
+        )}
         <Field label="Ticket number field">
           <Code value={caps.displayIdField} />
         </Field>

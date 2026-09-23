@@ -43,7 +43,7 @@ router.get('/status', async (_req, res) => {
     }
     if (!capabilities) {
       warnings.push(`${tenant.name}: the SuperOps schema has not been probed yet. Run the connection test in Settings.`);
-    } else if (!capabilities.bodyField) {
+    } else if (!capabilities.bodyField && !capabilities.conversationQuery) {
       warnings.push(
         `${tenant.name}: no ticket body field was found on this SuperOps schema, so classification uses the subject line only.`,
       );

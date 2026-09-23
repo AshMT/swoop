@@ -9,6 +9,7 @@ import {
   testAi,
   testSuperOps,
   type ConnectionTestResult,
+  bodySource,
 } from '../api';
 import { Alert, Spinner, Toggle } from '../components/ui';
 import { CheckIcon, SwoopLogo } from '../components/Icons';
@@ -526,12 +527,12 @@ function SuperOpsTestResult({ result }: { result: ConnectionTestResult }) {
   }
   const caps = result.capabilities;
   return (
-    <Alert tone={caps?.bodyField ? 'success' : 'warning'} title="Connected">
+    <Alert tone={bodySource(caps) ? 'success' : 'warning'} title="Connected">
       <p className="text-xs">
         Swoop inspected your GraphQL schema and will read tickets via <code>{caps?.listQuery}</code>
-        {caps?.bodyField ? (
+        {bodySource(caps) ? (
           <>
-            , using <code>{caps.bodyField}</code> as the ticket body
+            , reading the ticket text from <code>{bodySource(caps)}</code>
           </>
         ) : (
           ' — but found no ticket body field, so it will classify on the subject line alone'
