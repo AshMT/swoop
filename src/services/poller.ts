@@ -12,6 +12,7 @@ import { emptySummary, type PollSummary } from './matching';
 import { resolveClient, type MatchMethod } from './triage/tenancy';
 import { runTriage } from './triage/pipeline';
 import { expireStaleApprovals } from './approvals/service';
+import { sweepExecutions } from './execution/executor';
 import { pruneAllTenants } from './retention';
 import { createLogger, describeError } from '../lib/logger';
 import { runPool } from '../lib/pool';
@@ -44,6 +45,7 @@ const SUPERVISOR_INTERVAL_MS = 30_000;
 const RETENTION_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 let retentionTimer: ReturnType<typeof setInterval> | null = null;
+let executionSweepTimer: ReturnType<typeof setInterval> | null = null;
 
 export function startPoller(): void {
   if (running) return;
@@ -57,6 +59,14 @@ export function startPoller(): void {
   const firstPrune = setTimeout(() => void pruneAllTenants(), 60_000);
   firstPrune.unref?.();
   retentionTimer = setInterval(() => void pruneAllTenants(), RETENTION_INTERVAL_MS);
+  // A run interrupted by a restart must be looked at by a person, and a
+  // temporary password must not outlive its window.
+  void sweepExecutions().catch((err) => log.error('Execution sweep failed', err));
+  executionSweepTimer = setInterval(
+    () => void sweepExecutions().catch((err) => log.error('Execution sweep failed', err)),
+    5 * 60_000,
+  );
+  executionSweepTimer.unref?.();
   retentionTimer.unref?.();
 }
 
@@ -76,6 +86,10 @@ export async function stopPoller(timeoutMs = 20_000): Promise<void> {
   if (retentionTimer) {
     clearInterval(retentionTimer);
     retentionTimer = null;
+  }
+  if (executionSweepTimer) {
+    clearInterval(executionSweepTimer);
+    executionSweepTimer = null;
   }
   for (const schedule of schedules.values()) clearTimeout(schedule.timer);
   schedules.clear();

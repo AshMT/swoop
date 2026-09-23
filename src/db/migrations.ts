@@ -403,6 +403,71 @@ export const migrations: Migration[] = [
       addColumnIfMissing(db, 'action_logs', 'enrichment', 'TEXT');
     },
   },
+
+  {
+    // Knowledge, investigation and execution: Swoop looking things up for
+    // itself, and carrying out an approved change with proof it worked.
+    id: '017_agent_knowledge_execution',
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS runbooks (
+          id TEXT PRIMARY KEY,
+          tenant_id TEXT REFERENCES tenants(id),
+          client_id TEXT,
+          title TEXT NOT NULL,
+          body TEXT NOT NULL,
+          tags TEXT,
+          source TEXT DEFAULT 'swoop',
+          external_id TEXT,
+          updated_by TEXT,
+          updated_at INTEGER DEFAULT (unixepoch()),
+          created_at INTEGER DEFAULT (unixepoch())
+        );
+        CREATE INDEX IF NOT EXISTS runbooks_scope_idx ON runbooks (tenant_id, client_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS runbooks_external_idx ON runbooks (tenant_id, source, external_id);
+
+        CREATE TABLE IF NOT EXISTS executions (
+          id TEXT PRIMARY KEY,
+          action_log_id TEXT NOT NULL REFERENCES action_logs(id) ON DELETE CASCADE,
+          tenant_id TEXT,
+          client_id TEXT,
+          action TEXT NOT NULL,
+          mode TEXT NOT NULL,
+          status TEXT NOT NULL,
+          started_by TEXT,
+          started_at INTEGER DEFAULT (unixepoch()),
+          finished_at INTEGER,
+          target TEXT,
+          m365_tenant TEXT,
+          steps TEXT,
+          verification TEXT,
+          verification_detail TEXT,
+          summary TEXT,
+          secret TEXT,
+          secret_expires_at INTEGER,
+          secret_revealed_by TEXT,
+          secret_revealed_at INTEGER,
+          rollback TEXT,
+          note_posted INTEGER DEFAULT 0,
+          reply_posted INTEGER DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS executions_log_idx ON executions (action_log_id, started_at);
+        -- One live run per proposal, ever: a retry after a timeout must not
+        -- reset a password twice or double-assign a paid licence.
+        CREATE UNIQUE INDEX IF NOT EXISTS executions_live_once_idx
+          ON executions (action_log_id) WHERE mode = 'live' AND status IN ('running', 'succeeded', 'noop', 'uncertain');
+      `);
+      addColumnIfMissing(db, 'action_logs', 'investigation', 'TEXT');
+      addColumnIfMissing(db, 'action_logs', 'kb_refs', 'TEXT');
+      addColumnIfMissing(db, 'action_logs', 'execution_state', 'TEXT');
+      addColumnIfMissing(db, 'approvals', 'verification_method', 'TEXT');
+      addColumnIfMissing(db, 'approvals', 'verification_note', 'TEXT');
+      addColumnIfMissing(db, 'clients', 'authorised_contacts', 'TEXT');
+      addColumnIfMissing(db, 'tenants', 'agent_settings', 'TEXT');
+      addColumnIfMissing(db, 'tenants', 'execution_policy', 'TEXT');
+      addColumnIfMissing(db, 'tenants', 'kb_last_synced_at', 'INTEGER');
+    },
+  },
 ];
 
 /**

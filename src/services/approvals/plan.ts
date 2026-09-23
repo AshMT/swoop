@@ -2,6 +2,7 @@ import { findActionType } from '../../domain/classifications';
 import type { ClassificationEntities } from '../../types';
 import type { TenancyAssessment } from '../triage/tenancy';
 import type { UserEnrichment } from '../cipp/enrichment';
+import type { IdentityAssessment } from '../triage/identity';
 
 /**
  * The execution plan: exactly what would run in the client's tenant if this
@@ -24,7 +25,8 @@ export interface PlanStep {
 
 export interface PlanCheck {
   description: string;
-  status: 'pass' | 'fail' | 'unknown';
+  /** 'warn' is worth knowing but does not stop the change. */
+  status: 'pass' | 'fail' | 'warn' | 'unknown';
   detail?: string;
 }
 
@@ -39,6 +41,8 @@ export interface ExecutionPlan {
   prechecks: PlanCheck[];
   /** Anything that stops the plan being carried out as written. */
   blockers: string[];
+  /** Who asked and whether they may — see triage/identity.ts. */
+  identity: IdentityAssessment | null;
   reversible: boolean;
   rollback: string | null;
   /** Always false in this release: plans are for people to carry out. */
@@ -51,6 +55,7 @@ export function buildExecutionPlan(input: {
   entities: ClassificationEntities;
   tenancy: TenancyAssessment | null;
   enrichment: UserEnrichment | null;
+  identity?: IdentityAssessment | null;
 }): ExecutionPlan | null {
   const action = findActionType(input.classification);
   if (!action || action.plannedBackend !== 'cipp') return null;
@@ -70,6 +75,7 @@ export function buildExecutionPlan(input: {
   if (input.tenancy?.flags.includes('target_unrecognised_domain')) {
     blockers.push(`The target address is not on a domain ${input.tenancy.clientName} owns.`);
   }
+  if (input.identity?.blocker) blockers.push(input.identity.blocker);
 
   const T = tenant ?? '<tenant>';
   const U = upn ?? '<user>';
@@ -114,7 +120,8 @@ export function buildExecutionPlan(input: {
     case 'group_remove': {
       if (!group) blockers.push('The ticket does not name the group.');
       const G = group ?? '<group>';
-      const member = [{ value: U, label: U, addedFields: { userPrincipalName: U } }];
+      // CIPP needs the member's object id in `value`; removal fails without it.
+      const member = [{ value: '<user id from step 1>', label: U, addedFields: { userPrincipalName: U } }];
       steps.push(
         lookup,
         {
@@ -164,8 +171,14 @@ export function buildExecutionPlan(input: {
             {
               tenantFilter: T,
               userIds: ['<user id from step 1>'],
-              LicenseOperation: action.id === 'license_assign' ? 'Add' : 'Remove',
-              Licenses: [{ label: L, value: '<sku id from step 2>' }],
+              ...(action.id === 'license_assign'
+                ? { LicenseOperation: 'Add', Licenses: [{ label: L, value: '<sku id from step 2>' }] }
+                : // Removal reads LicensesToRemove; sending Licenses removes nothing.
+                  {
+                    LicenseOperation: 'Remove',
+                    RemoveAllLicenses: false,
+                    LicensesToRemove: [{ label: L, value: '<sku id from step 2>' }],
+                  }),
             },
           ],
         },
@@ -237,6 +250,7 @@ export function buildExecutionPlan(input: {
     steps,
     prechecks: buildPrechecks(action.id, input.enrichment, licence, group),
     blockers,
+    identity: input.identity ?? null,
     reversible,
     rollback,
     executable: false,
@@ -268,8 +282,13 @@ function buildPrechecks(
   if (enrichment.onPremisesSync) {
     checks.push({
       description: 'Cloud-managed account',
-      status: action === 'password_reset' || action === 'account_disable' || action === 'account_enable' ? 'fail' : 'pass',
-      detail: 'Synced from on-premises AD — change it there, or the next sync reverts it',
+      // A reset goes through password writeback and works, asynchronously;
+      // sign-in changes are undone by the next sync.
+      status: action === 'account_disable' || action === 'account_enable' ? 'fail' : action === 'password_reset' ? 'warn' : 'pass',
+      detail:
+        action === 'password_reset'
+          ? 'Synced from on-premises AD — the reset uses password writeback and completes asynchronously'
+          : 'Synced from on-premises AD — change it there, or the next sync reverts it',
     });
   }
 

@@ -94,6 +94,11 @@ export const tenants = sqliteTable('tenants', {
   cippClientId: text('cipp_client_id'),
   /** Encrypted at rest like the other credentials. */
   cippClientSecret: text('cipp_client_secret'),
+  /** JSON, see services/agent/settings.ts. */
+  agentSettings: text('agent_settings'),
+  /** JSON, see services/execution/policy.ts. Execution is off unless this says otherwise. */
+  executionPolicy: text('execution_policy'),
+  kbLastSyncedAt: integer('kb_last_synced_at'),
 
   // ─── Discovered SuperOps schema (see services/psa/schema-probe.ts) ──────────
   psaCapabilities: text('psa_capabilities'),
@@ -130,6 +135,8 @@ export const clients = sqliteTable('clients', {
   m365DefaultDomain: text('m365_default_domain'),
   /** JSON array of addresses whose tickets get a priority bump. */
   vipEmails: text('vip_emails'),
+  /** JSON array of addresses allowed to request changes for the company. */
+  authorisedContacts: text('authorised_contacts'),
   createdAt: integer('created_at').default(sql`(unixepoch())`),
 });
 
@@ -231,6 +238,12 @@ export const actionLogs = sqliteTable(
 
     /** JSON UserEnrichment from CIPP, when configured. */
     enrichment: text('enrichment'),
+    /** JSON Investigation — what the agent looked up and concluded. */
+    investigation: text('investigation'),
+    /** JSON KbRef[] — runbooks relevant to this ticket. */
+    kbRefs: text('kb_refs'),
+    /** 'dry_run_ok' | 'running' | 'succeeded' | 'noop' | 'failed' | 'blocked' */
+    executionState: text('execution_state'),
 
     createdAt: integer('created_at').default(sql`(unixepoch())`),
   },
@@ -287,10 +300,75 @@ export const approvals = sqliteTable(
     /** For a rejection: 'wrong_action' | 'wrong_target' | 'not_authorised' | 'duplicate' | 'other'. */
     reason: text('reason'),
     comment: text('comment'),
+    /** How the approver confirmed the requester is who they say — required for identity-sensitive changes. */
+    verificationMethod: text('verification_method'),
+    verificationNote: text('verification_note'),
     createdAt: integer('created_at').default(sql`(unixepoch())`),
   },
   (table) => ({
     logIdx: index('approvals_log_idx').on(table.actionLogId),
+  }),
+);
+
+export const runbooks = sqliteTable(
+  'runbooks',
+  {
+    id: text('id').primaryKey(),
+    tenantId: text('tenant_id').references(() => tenants.id),
+    /** Null means it applies to every client. */
+    clientId: text('client_id'),
+    title: text('title').notNull(),
+    body: text('body').notNull(),
+    /** JSON string[]. */
+    tags: text('tags'),
+    /** 'swoop' (written here) or 'superops' (synced, read-only). */
+    source: text('source').default('swoop'),
+    externalId: text('external_id'),
+    updatedBy: text('updated_by'),
+    updatedAt: integer('updated_at').default(sql`(unixepoch())`),
+    createdAt: integer('created_at').default(sql`(unixepoch())`),
+  },
+  (table) => ({
+    scopeIdx: index('runbooks_scope_idx').on(table.tenantId, table.clientId),
+  }),
+);
+
+export const executions = sqliteTable(
+  'executions',
+  {
+    id: text('id').primaryKey(),
+    actionLogId: text('action_log_id')
+      .notNull()
+      .references(() => actionLogs.id, { onDelete: 'cascade' }),
+    tenantId: text('tenant_id'),
+    clientId: text('client_id'),
+    action: text('action').notNull(),
+    /** 'dry_run' | 'live' */
+    mode: text('mode').notNull(),
+    /** 'running' | 'dry_run_ok' | 'succeeded' | 'noop' | 'failed' | 'blocked' | 'uncertain' — sent, but the outcome is unknown */
+    status: text('status').notNull(),
+    startedBy: text('started_by'),
+    startedAt: integer('started_at').default(sql`(unixepoch())`),
+    finishedAt: integer('finished_at'),
+    target: text('target'),
+    m365Tenant: text('m365_tenant'),
+    /** JSON ExecutionStep[] with secrets redacted. */
+    steps: text('steps'),
+    /** 'verified' | 'reported' | 'pending' | 'failed' | 'skipped' */
+    verification: text('verification'),
+    verificationDetail: text('verification_detail'),
+    summary: text('summary'),
+    /** Encrypted one-time secret, e.g. a temporary password. Never logged. */
+    secret: text('secret'),
+    secretExpiresAt: integer('secret_expires_at'),
+    secretRevealedBy: text('secret_revealed_by'),
+    secretRevealedAt: integer('secret_revealed_at'),
+    rollback: text('rollback'),
+    notePosted: integer('note_posted', { mode: 'boolean' }).default(false),
+    replyPosted: integer('reply_posted', { mode: 'boolean' }).default(false),
+  },
+  (table) => ({
+    logIdx: index('executions_log_idx').on(table.actionLogId, table.startedAt),
   }),
 );
 

@@ -265,6 +265,36 @@ export class SuperOpsClient implements PSAClient {
       .sort((a, b) => a.name.localeCompare(b.name));
   }
 
+  /**
+   * Knowledge base articles, a page at a time. Null when the schema exposes
+   * no knowledge base the probe could recognise.
+   */
+  async listKbArticles(page: number): Promise<Array<{ id: string; title: string; body: string }> | null> {
+    const caps = await this.ensureCapabilities();
+    if (!caps.kbListQuery || !caps.kbResultField || !caps.kbIdField || !caps.kbTitleField) return null;
+    const selection = [caps.kbIdField, caps.kbTitleField, caps.kbBodyField].filter(Boolean).join(' ');
+    const arg = caps.kbListArgName ? `(${caps.kbListArgName}: ${literal({ page, pageSize: MAX_PAGE_SIZE })})` : '';
+    const query = `
+      query SwoopKbList {
+        ${caps.kbListQuery}${arg} {
+          ${caps.kbResultField} { ${selection} }
+        }
+      }
+    `;
+    const data = await this.request<Record<string, unknown>>(query);
+    const root = data[caps.kbListQuery] as Record<string, unknown> | undefined;
+    const rows = root?.[caps.kbResultField];
+    if (!Array.isArray(rows)) return [];
+    return rows
+      .filter((row): row is Record<string, unknown> => Boolean(row) && typeof row === 'object')
+      .map((row) => ({
+        id: String(row[caps.kbIdField!] ?? ''),
+        title: String(row[caps.kbTitleField!] ?? '').trim(),
+        body: caps.kbBodyField ? htmlToText(String(row[caps.kbBodyField] ?? '')) : '',
+      }))
+      .filter((a) => a.id && a.title);
+  }
+
   // ─── Writes ─────────────────────────────────────────────────────────────────
 
   async addTicketNote(ticketId: string, note: string, isPrivate: boolean): Promise<void> {

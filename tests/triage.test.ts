@@ -353,3 +353,29 @@ describe('scoped outage language', () => {
     expect(result.impactFloor).toBe('team');
   });
 });
+
+describe('identity', () => {
+  it('blocks an on-behalf change from someone who is not an authorised contact', async () => {
+    const { assessIdentity } = await import('../src/services/triage/identity');
+    const c = { name: 'Acme', authorisedContacts: JSON.stringify(['boss@acme.com']) };
+    expect(assessIdentity({ client: c, action: 'group_add', requesterEmail: 'intern@acme.com', targetEmail: 'sam@acme.com' }).blocker).toMatch(/not an authorised contact/);
+    expect(assessIdentity({ client: c, action: 'group_add', requesterEmail: 'boss@acme.com', targetEmail: 'sam@acme.com' }).blocker).toBeNull();
+  });
+
+  it('allows a self-service reset but flags it for out-of-band confirmation', async () => {
+    const { assessIdentity } = await import('../src/services/triage/identity');
+    const c = { name: 'Acme', authorisedContacts: JSON.stringify(['boss@acme.com']) };
+    const self = assessIdentity({ client: c, action: 'password_reset', requesterEmail: 'sam@acme.com', targetEmail: 'sam@acme.com' });
+    expect(self.blocker).toBeNull();
+    expect(self.requesterIsTarget).toBe(true);
+    // Someone else's reset is on-behalf and needs an authorised requester.
+    expect(assessIdentity({ client: c, action: 'password_reset', requesterEmail: 'tom@acme.com', targetEmail: 'sam@acme.com' }).blocker).toBeTruthy();
+  });
+
+  it('does not block when the client has no list, but says so', async () => {
+    const { assessIdentity } = await import('../src/services/triage/identity');
+    const r = assessIdentity({ client: { name: 'Acme', authorisedContacts: null }, action: 'group_add', requesterEmail: 'x@acme.com', targetEmail: 'y@acme.com' });
+    expect(r.blocker).toBeNull();
+    expect(r.note).toMatch(/no authorised contacts/);
+  });
+});

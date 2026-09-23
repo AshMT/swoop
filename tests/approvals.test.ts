@@ -104,9 +104,16 @@ describe('execution plan', () => {
     expect(plan.blockers.length).toBe(4);
   });
 
-  it('fails a precheck for an on-premises synced account', () => {
+  it('fails a precheck for disabling an on-premises synced account, and warns for a reset', () => {
+    const synced = {
+      tenant: 'acme.onmicrosoft.com', upn: 'sam@acme.com', found: true, displayName: 'Sam', accountEnabled: true,
+      userType: 'Member', jobTitle: null, department: null, onPremisesSync: true, licences: [], lastPasswordChange: null,
+      createdAt: null, groups: [], mfa: null, fetchedAt: 0, error: null,
+    };
+    const reset = buildExecutionPlan({ classification: 'password_reset', entities, tenancy, enrichment: synced })!;
+    expect(reset.prechecks.find((c) => c.description === 'Cloud-managed account')?.status).toBe('warn');
     const plan = buildExecutionPlan({
-      classification: 'password_reset',
+      classification: 'account_disable',
       entities,
       tenancy,
       enrichment: {

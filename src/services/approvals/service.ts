@@ -9,6 +9,7 @@ import { recordAudit } from '../audit';
 import { createPsaClient } from '../psa/factory';
 import { readApprovalPolicy } from './policy';
 import type { ExecutionPlan } from './plan';
+import { needsAttestation, VERIFICATION_METHODS, type VerificationMethod } from '../execution/actions';
 
 const log = createLogger('Approvals');
 
@@ -63,6 +64,9 @@ export async function decide(input: {
   decision: 'approved' | 'rejected';
   reason?: RejectionReason | null;
   comment?: string | null;
+  /** How the approver confirmed the requester's identity. */
+  verificationMethod?: VerificationMethod | null;
+  verificationNote?: string | null;
 }): Promise<{ state: string; approvals: number; required: number }> {
   const [row] = await db.select().from(actionLogs).where(eq(actionLogs.id, input.actionLogId)).limit(1);
   if (!row) throw new ApprovalError('Proposal not found', 404);
@@ -86,6 +90,17 @@ export async function decide(input: {
   if (input.decision === 'rejected' && !input.reason) {
     throw new ApprovalError('Choose a reason for the rejection.');
   }
+  const verificationNote = input.verificationNote?.trim().slice(0, 1000) || null;
+  if (input.decision === 'approved' && needsAttestation(row.classification)) {
+    // A new password, new MFA or a re-enabled account is what an impersonator
+    // wants. Each approver says how they know the requester is genuine.
+    if (!input.verificationMethod || !VERIFICATION_METHODS.some((m) => m.id === input.verificationMethod)) {
+      throw new ApprovalError('Record how you confirmed the requester’s identity before approving this change.');
+    }
+    if (input.verificationMethod === 'other' && !verificationNote) {
+      throw new ApprovalError('Explain how you confirmed the requester’s identity.');
+    }
+  }
 
   await db.insert(approvals).values({
     id: uuidv4(),
@@ -95,6 +110,8 @@ export async function decide(input: {
     decision: input.decision,
     reason: input.decision === 'rejected' ? (input.reason ?? 'other') : null,
     comment,
+    verificationMethod: input.decision === 'approved' ? (input.verificationMethod ?? null) : null,
+    verificationNote: input.decision === 'approved' ? verificationNote : null,
   });
 
   const required = Math.max(1, row.approvalsRequired ?? 1);
@@ -134,6 +151,7 @@ export async function decide(input: {
       approvals: approvalsSoFar,
       required,
       reason: input.reason ?? null,
+      verificationMethod: input.verificationMethod ?? null,
     },
   });
 
@@ -141,6 +159,12 @@ export async function decide(input: {
     await postDecisionNote(row.id).catch((err) =>
       log.warn(`Could not post the decision note for ${row.ticketId}: ${describeError(err)}`),
     );
+  }
+  if (state === 'approved') {
+    // Imported lazily: the executor imports this module's neighbours, and
+    // the policy decides whether anything happens at all.
+    const { maybeRunOnApproval } = await import('../execution/executor');
+    void maybeRunOnApproval(row.id, input.user);
   }
 
   return { state, approvals: approvalsSoFar, required };

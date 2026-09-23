@@ -175,11 +175,20 @@ describe('approvals', () => {
     await as('reviewer', request(app).post(`/api/actions/${logId}/approve`)).send({}).expect(403);
   });
 
+  it('an MFA reset cannot be approved without saying how the requester was verified', async () => {
+    const res = await as('approver', request(app).post(`/api/actions/${logId}/approve`)).send({ comment: 'ok' }).expect(400);
+    expect(res.body.error).toMatch(/identity/);
+    await as('approver', request(app).post(`/api/actions/${logId}/approve`))
+      .send({ verificationMethod: 'other' })
+      .expect(400);
+  });
+
   it('dual approval needs two different people', async () => {
-    const first = await as('approver', request(app).post(`/api/actions/${logId}/approve`)).send({ comment: 'ok' }).expect(200);
+    const verified = { verificationMethod: 'callback_known_number' };
+    const first = await as('approver', request(app).post(`/api/actions/${logId}/approve`)).send({ comment: 'ok', ...verified }).expect(200);
     expect(first.body).toMatchObject({ state: 'pending', approvals: 1, required: 2 });
-    await as('approver', request(app).post(`/api/actions/${logId}/approve`)).send({}).expect(409);
-    const second = await as('approver2', request(app).post(`/api/actions/${logId}/approve`)).send({}).expect(200);
+    await as('approver', request(app).post(`/api/actions/${logId}/approve`)).send(verified).expect(409);
+    const second = await as('approver2', request(app).post(`/api/actions/${logId}/approve`)).send(verified).expect(200);
     expect(second.body.state).toBe('approved');
   });
 

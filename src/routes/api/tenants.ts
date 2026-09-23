@@ -19,6 +19,10 @@ import { approvalPolicySchema, readApprovalPolicy } from '../../services/approva
 import { createCippClient } from '../../services/cipp/client';
 import { recordAudit } from '../../services/audit';
 import { CATEGORIES } from '../../domain/triage';
+import { agentSettingsSchema, readAgentSettings } from '../../services/agent/settings';
+import { executionPolicySchema, readExecutionPolicy } from '../../services/execution/policy';
+import { EXECUTABLE_ACTIONS } from '../../services/execution/actions';
+import { syncSuperOpsKb } from '../../services/knowledge/runbooks';
 
 const router = Router();
 
@@ -72,6 +76,8 @@ const updateSchema = z.object({
   logRetentionDays: z.number().int().min(0).max(3650).optional(),
   triageSettings: triageSettingsSchema.optional(),
   approvalPolicy: approvalPolicySchema.optional(),
+  agentSettings: agentSettingsSchema.optional(),
+  executionPolicy: executionPolicySchema.optional(),
   cippEnabled: z.boolean().optional(),
   cippApiUrl: z.string().url().max(2048).nullable().optional(),
   cippTenantId: z.string().max(200).nullable().optional(),
@@ -100,6 +106,8 @@ router.patch('/:id', requireRole('admin'), async (req: AuthRequest, res) => {
     systemPromptOverride,
     triageSettings,
     approvalPolicy,
+    agentSettings,
+    executionPolicy,
     cippClientSecret,
     ...rest
   } = parsed.data;
@@ -113,6 +121,29 @@ router.patch('/:id', requireRole('admin'), async (req: AuthRequest, res) => {
     updates.triageSettings = JSON.stringify(triageSettings);
   }
   if (approvalPolicy) updates.approvalPolicy = JSON.stringify(approvalPolicy);
+  if (agentSettings) updates.agentSettings = JSON.stringify(agentSettings);
+  if (executionPolicy) {
+    const unknown = executionPolicy.actions.filter((a) => !EXECUTABLE_ACTIONS.includes(a));
+    if (unknown.length) {
+      res.status(400).json({ error: `These actions cannot be executed: ${unknown.join(', ')}` });
+      return;
+    }
+    // Going live is the one setting that changes what Swoop can do to a
+    // client's tenant, so it is recorded on its own line in the audit log.
+    const before = readExecutionPolicy(existing.executionPolicy);
+    if (before.mode !== executionPolicy.mode) {
+      await recordAudit({
+        user: req.user,
+        action: 'execution.mode_change',
+        targetType: 'tenant',
+        targetId: existing.id,
+        tenantId: existing.id,
+        detail: { from: before.mode, to: executionPolicy.mode },
+        req,
+      });
+    }
+    updates.executionPolicy = JSON.stringify(executionPolicy);
+  }
 
   if (cippClientSecret !== undefined) {
     const trimmed = cippClientSecret?.trim();
@@ -173,7 +204,12 @@ router.patch('/:id', requireRole('admin'), async (req: AuthRequest, res) => {
 /** Triage settings and approval policy with defaults filled in, for the editor. */
 router.get('/:id/policies', async (req, res) => {
   const [tenant] = await db
-    .select({ triageSettings: tenants.triageSettings, approvalPolicy: tenants.approvalPolicy })
+    .select({
+      triageSettings: tenants.triageSettings,
+      approvalPolicy: tenants.approvalPolicy,
+      agentSettings: tenants.agentSettings,
+      executionPolicy: tenants.executionPolicy,
+    })
     .from(tenants)
     .where(eq(tenants.id, req.params.id))
     .limit(1);
@@ -184,9 +220,29 @@ router.get('/:id/policies', async (req, res) => {
   res.json({
     triageSettings: readTriageSettings(tenant.triageSettings),
     approvalPolicy: readApprovalPolicy(tenant.approvalPolicy),
+    agentSettings: readAgentSettings(tenant.agentSettings),
+    executionPolicy: readExecutionPolicy(tenant.executionPolicy),
+    executionDisabledByInstall: config().executionDisabled,
+    executableActions: EXECUTABLE_ACTIONS,
     categories: CATEGORIES,
   });
 });
+
+/** Pulls the SuperOps knowledge base into the runbook store. */
+router.post(
+  '/:id/kb-sync',
+  requireRole('reviewer'),
+  rateLimit({ windowMs: 60_000, max: 5, keyPrefix: 'kb-sync' }),
+  async (req, res) => {
+    const [tenant] = await db.select().from(tenants).where(eq(tenants.id, req.params.id)).limit(1);
+    if (!tenant) {
+      res.status(404).json({ error: 'Tenant not found' });
+      return;
+    }
+    const result = await syncSuperOpsKb(tenant);
+    res.status(result.error && result.imported === 0 ? 400 : 200).json({ ok: !result.error, ...result });
+  },
+);
 
 /** Checks the CIPP credentials by listing the tenants the client can see. */
 router.post(

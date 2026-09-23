@@ -13,6 +13,17 @@ import { CATEGORIES, CATEGORY_IDS, IMPACTS, PRIORITIES, PRIORITY_LABELS, URGENCI
 import { describeError } from '../../lib/logger';
 import { ApprovalError, decide, expireStaleApprovals, listDecisions, REJECTION_REASONS } from '../../services/approvals/service';
 import { recordAudit } from '../../services/audit';
+import { investigate } from '../../services/agent/investigate';
+import type { SimilarTicket } from '../../services/triage/history';
+import { VERIFICATION_METHODS, EXECUTABLE_ACTIONS, type VerificationMethod } from '../../services/execution/actions';
+import {
+  ExecutionRefused,
+  executionReadiness,
+  listExecutions,
+  resolveUncertain,
+  revealSecret,
+  startExecution,
+} from '../../services/execution/executor';
 
 const router = Router();
 
@@ -152,11 +163,22 @@ const listColumns = {
   approvalsRequired: actionLogs.approvalsRequired,
   approvalExpiresAt: actionLogs.approvalExpiresAt,
   supersededBy: actionLogs.supersededBy,
+  executionState: actionLogs.executionState,
   createdAt: actionLogs.createdAt,
 };
 
 /** Columns stored as JSON text, parsed before they leave the API. */
-const JSON_COLUMNS = ['entities', 'signals', 'nextSteps', 'similar', 'tenancy', 'executionPlan', 'enrichment'] as const;
+const JSON_COLUMNS = [
+  'entities',
+  'signals',
+  'nextSteps',
+  'similar',
+  'tenancy',
+  'executionPlan',
+  'enrichment',
+  'investigation',
+  'kbRefs',
+] as const;
 
 function hydrate<T extends Record<string, unknown>>(row: T): T {
   const out: Record<string, unknown> = { ...row };
@@ -271,6 +293,8 @@ router.get('/vocabulary', (_req, res) => {
     impacts: IMPACTS,
     urgencies: URGENCIES,
     rejectionReasons: REJECTION_REASONS,
+    verificationMethods: VERIFICATION_METHODS,
+    executableActions: EXECUTABLE_ACTIONS,
   });
 });
 
@@ -524,6 +548,8 @@ function safeParseArray(raw: string | null): string[] {
 const decisionSchema = z.object({
   comment: z.string().max(2000).nullable().optional(),
   reason: z.enum(REJECTION_REASONS.map((r) => r.id) as [string, ...string[]]).nullable().optional(),
+  verificationMethod: z.enum(VERIFICATION_METHODS.map((m) => m.id) as [VerificationMethod, ...VerificationMethod[]]).nullable().optional(),
+  verificationNote: z.string().max(1000).nullable().optional(),
 });
 
 for (const decision of ['approve', 'reject'] as const) {
@@ -544,6 +570,8 @@ for (const decision of ['approve', 'reject'] as const) {
           decision: decision === 'approve' ? 'approved' : 'rejected',
           reason: (parsed.data.reason ?? null) as never,
           comment: parsed.data.comment ?? null,
+          verificationMethod: parsed.data.verificationMethod ?? null,
+          verificationNote: parsed.data.verificationNote ?? null,
         });
         res.json({ ok: true, ...result });
       } catch (err) {
@@ -713,6 +741,144 @@ router.post(
     }
   },
 );
+
+// ─── Investigation ─────────────────────────────────────────────────────────────
+
+/** Runs (or re-runs) the investigation on a logged ticket, on demand. */
+router.post(
+  '/:id/investigate',
+  requireRole('reviewer'),
+  rateLimit({ windowMs: 60_000, max: 10, keyPrefix: 'investigate' }),
+  async (req: AuthRequest, res) => {
+    const [row] = await db.select().from(actionLogs).where(eq(actionLogs.id, req.params.id)).limit(1);
+    if (!row?.tenantId || !row.clientId) {
+      res.status(404).json({ error: 'Action log not found' });
+      return;
+    }
+    if (row.crossTenant) {
+      res.status(400).json({ error: 'This request crosses clients, so Swoop does not investigate it.' });
+      return;
+    }
+    const [tenant] = await db.select().from(tenants).where(eq(tenants.id, row.tenantId)).limit(1);
+    const [client] = await db.select().from(clients).where(eq(clients.id, row.clientId)).limit(1);
+    if (!tenant || !client) {
+      res.status(404).json({ error: 'Tenant or client not found' });
+      return;
+    }
+    const entities = safeParseEntities(typeof row.entities === 'string' ? row.entities : null);
+    const similar = (() => {
+      try {
+        return row.similar ? (JSON.parse(row.similar) as SimilarTicket[]) : [];
+      } catch {
+        return [];
+      }
+    })();
+    const result = await investigate({
+      tenant,
+      client,
+      ticket: { subject: row.ticketSubject ?? '', body: row.ticketBody ?? '', requesterEmail: row.requesterEmail },
+      triage: {
+        classification: row.classification ?? 'ESCALATE',
+        category: row.category ?? 'other',
+        priority: row.priority ?? 'P4',
+        summary: row.summary ?? '',
+        targetUserEmail: entities.target_user_email ?? null,
+      },
+      similar,
+    });
+    await db.update(actionLogs).set({ investigation: JSON.stringify(result) }).where(eq(actionLogs.id, row.id));
+    await recordAudit({
+      user: req.user,
+      action: 'ticket.investigate',
+      targetType: 'action_log',
+      targetId: row.id,
+      tenantId: row.tenantId,
+      detail: { ticketId: row.ticketId, status: result.status, steps: result.steps.length },
+      req,
+    });
+    res.json(result);
+  },
+);
+
+// ─── Execution ─────────────────────────────────────────────────────────────────
+
+/** The runs of a proposal, and whether another can start — for the ticket page. */
+router.get('/:id/executions', async (req: AuthRequest, res) => {
+  try {
+    const [runs, readiness] = await Promise.all([listExecutions(req.params.id), executionReadiness(req.params.id, req.user ?? null)]);
+    res.json({ runs, readiness });
+  } catch (err) {
+    if (err instanceof ExecutionRefused) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+    throw err;
+  }
+});
+
+const executeSchema = z.object({ mode: z.enum(['dry_run', 'live']) });
+
+router.post(
+  '/:id/execute',
+  requireRole('approver'),
+  rateLimit({ windowMs: 60_000, max: 20, keyPrefix: 'execute' }),
+  async (req: AuthRequest, res) => {
+    const parsed = executeSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'mode must be dry_run or live' });
+      return;
+    }
+    try {
+      const { executionId } = await startExecution(req.params.id, parsed.data.mode, req.user!);
+      res.status(202).json({ ok: true, executionId });
+    } catch (err) {
+      if (err instanceof ExecutionRefused) {
+        res.status(err.status).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+  },
+);
+
+router.post(
+  '/executions/:executionId/reveal',
+  requireRole('approver'),
+  rateLimit({ windowMs: 60_000, max: 10, keyPrefix: 'reveal' }),
+  async (req: AuthRequest, res) => {
+    try {
+      const secret = await revealSecret(req.params.executionId, req.user!);
+      res.setHeader('Cache-Control', 'no-store');
+      res.json({ secret });
+    } catch (err) {
+      if (err instanceof ExecutionRefused) {
+        res.status(err.status).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+  },
+);
+
+const resolveSchema = z.object({ outcome: z.enum(['succeeded', 'failed']), note: z.string().max(1000).nullable().optional() });
+
+router.post('/executions/:executionId/resolve', requireRole('approver'), async (req: AuthRequest, res) => {
+  const parsed = resolveSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'outcome must be succeeded or failed' });
+    return;
+  }
+  try {
+    await resolveUncertain(req.params.executionId, parsed.data.outcome, parsed.data.note ?? null, req.user!);
+    res.json({ ok: true });
+  } catch (err) {
+    if (err instanceof ExecutionRefused) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+    throw err;
+  }
+});
 
 function safeParseEntities(raw: string | null): Record<string, string | null> {
   if (!raw) return {};

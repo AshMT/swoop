@@ -4,9 +4,11 @@ import type {
   approvals,
   auditLog,
   clients,
+  executions,
   incidentClusters,
   invites,
   processedTickets,
+  runbooks,
   tenants,
   users,
 } from './db/schema';
@@ -24,6 +26,8 @@ export type IncidentCluster = InferSelectModel<typeof incidentClusters>;
 export type Approval = InferSelectModel<typeof approvals>;
 export type AuditEntry = InferSelectModel<typeof auditLog>;
 export type Invite = InferSelectModel<typeof invites>;
+export type Runbook = InferSelectModel<typeof runbooks>;
+export type Execution = InferSelectModel<typeof executions>;
 
 /**
  * A tenant safe to return over the API: secrets removed, and the large

@@ -18,6 +18,9 @@ import { loadHistoryContext } from './history';
 import { isWithinBusinessHours, readTriageSettings } from './settings';
 import { detectSignals } from './signals';
 import { assessTenancy, parseEmailList, type MatchMethod } from './tenancy';
+import { assessIdentity } from './identity';
+import { investigate, shouldAutoInvestigate, type Investigation } from '../agent/investigate';
+import { searchKnowledge, type KbRef } from '../knowledge/runbooks';
 import { factsForPrompt, finaliseTriage, type TriageOutcome } from './verdict';
 
 const log = createLogger('Triage');
@@ -167,6 +170,34 @@ export async function runTriage(input: TriageRunInput): Promise<TriageRunResult>
   });
   const verdict = outcome.classification;
 
+  // ─── Knowledge and investigation ──────────────────────────────────────────
+  // Runbooks are matched on every ticket — cheap, deterministic, and useful
+  // to a technician whether or not the agent runs.
+  const kbRefs: KbRef[] = await searchKnowledge({
+    tenantId: tenant.id,
+    clientId: client.id,
+    query: `${ticket.subject} ${verdict.triage.summary}`,
+    limit: 3,
+  }).catch(() => []);
+
+  let investigation: Investigation | null = null;
+  if (!tenancy.crossTenant && shouldAutoInvestigate(tenant, verdict.classification)) {
+    investigation = await investigate({
+      tenant,
+      client,
+      ticket: { subject: ticket.subject, body: ticket.body, requesterEmail: ticket.requesterEmail, requesterName: ticket.requesterName },
+      triage: {
+        classification: verdict.classification,
+        category: verdict.triage.category,
+        priority: outcome.priority,
+        summary: verdict.triage.summary,
+        targetUserEmail: verdict.entities.target_user_email,
+      },
+      similar: history.similar,
+    });
+    applyInvestigation(investigation, verdict, outcome);
+  }
+
   // CIPP lookup of the target — only for a proposed action in this client's
   // own tenant. Never for a cross-client request: that is exactly the case
   // where looking the user up would be acting on an unverified instruction.
@@ -192,8 +223,32 @@ export async function runTriage(input: TriageRunInput): Promise<TriageRunResult>
     });
   }
 
+  const identity = isAction
+    ? assessIdentity({
+        client,
+        action: verdict.classification,
+        requesterEmail: ticket.requesterEmail,
+        targetEmail: verdict.entities.target_user_email,
+      })
+    : null;
+  if (identity?.blocker) {
+    outcome.signals.push({
+      id: 'identity_unauthorised',
+      label: 'Requester not authorised',
+      detail: identity.blocker,
+      severity: 'critical',
+    });
+  } else if (identity?.requesterIsTarget && ['password_reset', 'mfa_reset'].includes(verdict.classification)) {
+    outcome.signals.push({
+      id: 'identity_self_service',
+      label: 'Self-service reset',
+      detail: 'Asking about their own account — confirm it is really them, out of band',
+      severity: 'info',
+    });
+  }
+
   const plan = isAction
-    ? buildExecutionPlan({ classification: verdict.classification, entities: verdict.entities, tenancy, enrichment })
+    ? buildExecutionPlan({ classification: verdict.classification, entities: verdict.entities, tenancy, enrichment, identity })
     : null;
 
   const approval = decideApproval(
@@ -299,6 +354,9 @@ export async function runTriage(input: TriageRunInput): Promise<TriageRunResult>
     similar: JSON.stringify(history.similar),
     clusterId: cluster?.clusterId ?? null,
 
+    investigation: investigation ? JSON.stringify(investigation) : null,
+    kbRefs: kbRefs.length ? JSON.stringify(kbRefs) : null,
+
     approvalState: approval.state,
     approvalsRequired: approval.required,
     approvalReason: approval.reason,
@@ -321,5 +379,69 @@ export async function runTriage(input: TriageRunInput): Promise<TriageRunResult>
       ),
     );
 
+  if (approval.state === 'auto_approved') {
+    const { maybeRunOnApproval } = await import('../execution/executor');
+    void maybeRunOnApproval(logId, null);
+  }
+
   return { logId, result, outcome, approval, plan, cluster, notePosted, noteError };
+}
+
+/**
+ * Folds a completed investigation into the verdict.
+ *
+ * The agent can fill in what triage could not — the exact group, the licence
+ * the client actually has — but only for the action triage already proposed,
+ * and only with values the tools confirmed. When it disagrees about the
+ * action itself, that is flagged for the approver and blocks auto-approval;
+ * it never silently swaps one change for another.
+ */
+export function applyInvestigation(
+  investigation: Investigation,
+  verdict: TriageOutcome['classification'],
+  outcome: TriageOutcome,
+): void {
+  if (investigation.status !== 'completed') {
+    outcome.signals.push({
+      id: 'investigation_failed',
+      label: 'Investigation did not finish',
+      detail: investigation.error ?? 'No answer from the agent',
+      severity: 'info',
+    });
+    return;
+  }
+  const rec = investigation.recommendation;
+  const isAction = verdict.classification !== 'ESCALATE' && verdict.classification !== 'FOLLOW_UP';
+  if (!rec?.action || !isAction) return;
+  if (rec.action !== verdict.classification) {
+    outcome.signals.push({
+      id: 'agent_disagrees',
+      label: 'Investigation disagrees',
+      detail: `Triage proposed ${verdict.classification}; the investigation recommends ${rec.action}. ${investigation.diagnosis ?? ''}`.trim(),
+      severity: 'warn',
+    });
+    return;
+  }
+  const target = verdict.entities.target_user_email;
+  if (rec.targetUserEmail && target && rec.targetUserEmail !== target.toLowerCase()) {
+    outcome.signals.push({
+      id: 'agent_disagrees',
+      label: 'Investigation disagrees',
+      detail: `Triage named ${target}; the investigation points to ${rec.targetUserEmail}.`,
+      severity: 'warn',
+    });
+    return;
+  }
+  // The target is never introduced here: tenant recognition has already
+  // checked the user triage named, and a user added now would skip that check.
+  const filled: string[] = [];
+  if (rec.groupName && rec.groupName.toLowerCase() !== (verdict.entities.group_name ?? '').toLowerCase()) {
+    verdict.entities.group_name = rec.groupName;
+    filled.push(`group "${rec.groupName}"`);
+  }
+  if (rec.licenceName && rec.licenceName.toLowerCase() !== (verdict.entities.license_sku ?? '').toLowerCase()) {
+    verdict.entities.license_sku = rec.licenceName;
+    filled.push(`licence "${rec.licenceName}"`);
+  }
+  if (filled.length) outcome.adjustments.push(`Investigation confirmed ${filled.join(', ')} against the tenant`);
 }

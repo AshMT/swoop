@@ -13,7 +13,7 @@ import { createLogger, describeError } from '../../lib/logger';
 const log = createLogger('SuperOps:probe');
 
 /** Version stamp — bump to force a re-probe after changing the probe logic. */
-export const CAPABILITIES_VERSION = 3;
+export const CAPABILITIES_VERSION = 4;
 
 export interface ObjectFieldShape {
   /** 'leaf' needs no sub-selection; 'object' does; 'missing' means absent. */
@@ -91,6 +91,14 @@ export interface PsaCapabilities {
   noteTicketField: string | null;
   noteTicketIdField: string | null;
 
+  /** Knowledge base article list, when the schema exposes one. */
+  kbListQuery: string | null;
+  kbListArgName: string | null;
+  kbResultField: string | null;
+  kbIdField: string | null;
+  kbTitleField: string | null;
+  kbBodyField: string | null;
+
   /** Anything the probe could not resolve, surfaced in the UI. */
   warnings: string[];
 }
@@ -114,6 +122,19 @@ const NOTE_MUTATION_CANDIDATES = [
   'addNote',
   'createWorklog',
 ];
+const KB_LIST_CANDIDATES = [
+  'getKbArticleList',
+  'getKBArticleList',
+  'getKnowledgeBaseArticleList',
+  'getArticleList',
+  'getKbArticles',
+  'getSolutionList',
+  'getKbItemList',
+];
+const KB_RESULT_CANDIDATES = ['articles', 'kbArticles', 'solutions', 'items', 'data', 'results', 'records'];
+const KB_ID_CANDIDATES = ['articleId', 'kbArticleId', 'itemId', 'solutionId', 'id'];
+const KB_TITLE_CANDIDATES = ['title', 'name', 'subject', 'articleTitle'];
+const KB_BODY_CANDIDATES = ['content', 'body', 'articleContent', 'description', 'text', 'details'];
 const LIST_RESULT_CANDIDATES = ['tickets', 'items', 'data', 'results', 'records', 'edges', 'nodes'];
 const ID_CANDIDATES = ['ticketId', 'ticketID', 'id', 'workId'];
 const DISPLAY_ID_CANDIDATES = ['displayId', 'ticketNumber', 'number', 'displayID'];
@@ -232,6 +253,12 @@ export async function probeCapabilities(
     noteWorkItemFields: [],
     noteTicketField: null,
     noteTicketIdField: null,
+    kbListQuery: null,
+    kbListArgName: null,
+    kbResultField: null,
+    kbIdField: null,
+    kbTitleField: null,
+    kbBodyField: null,
     warnings,
   };
 
@@ -379,6 +406,34 @@ export async function probeCapabilities(
         'A client list query exists but its id or name field could not be resolved, so the client picker is unavailable. Company IDs can still be entered by hand.',
       );
       caps.clientListQuery = null;
+    }
+  }
+
+  // ─── Knowledge base, used as context for investigations ─────────────────────
+  const kbField =
+    findRootField(queryFields, KB_LIST_CANDIDATES) ??
+    queryFields.find((f) => /^get(kb|knowledge)\w*list$/i.test(f.name)) ??
+    null;
+  if (kbField) {
+    const payloadTypeName = namedType(kbField.type).name;
+    const payload = payloadTypeName ? await describeType(payloadTypeName) : null;
+    const payloadFields = payload?.fields ?? [];
+    const arrayField =
+      payloadFields.find((f) => KB_RESULT_CANDIDATES.includes(f.name)) ??
+      payloadFields.find((f) => !isLeafType(f.type) && isListType(f.type));
+    const articleTypeName = arrayField ? namedType(arrayField.type).name : null;
+    const articleType = articleTypeName ? await describeType(articleTypeName) : null;
+    const scalars = (articleType?.fields ?? []).filter((f) => isLeafType(f.type)).map((f) => f.name);
+    const id = pickField(scalars, KB_ID_CANDIDATES);
+    const title = pickField(scalars, KB_TITLE_CANDIDATES);
+    const body = pickField(scalars, KB_BODY_CANDIDATES);
+    if (arrayField && id && title) {
+      caps.kbListQuery = kbField.name;
+      caps.kbListArgName = kbField.args?.[0]?.name ?? null;
+      caps.kbResultField = arrayField.name;
+      caps.kbIdField = id;
+      caps.kbTitleField = title;
+      caps.kbBodyField = body;
     }
   }
 

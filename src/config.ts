@@ -42,6 +42,12 @@ export interface Config {
    * cloud (https://login.microsoftonline.us) or a local mock.
    */
   cippAuthorityUrl: string;
+  /**
+   * Install-wide kill switch for execution. When set, no change is made in
+   * any client tenant whatever the per-tenant policy says — for an incident,
+   * or an operator who wants the guarantee enforced outside the app.
+   */
+  executionDisabled: boolean;
 }
 
 const INSECURE_SECRETS = new Set([
@@ -154,6 +160,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     superopsApiUrl: env.SUPEROPS_API_URL?.trim().replace(/\/+$/, '') || null,
     cippAuthorityUrl:
       env.CIPP_AUTHORITY_URL?.trim().replace(/\/+$/, '') || 'https://login.microsoftonline.com',
+    executionDisabled: parseBoolEnv(env.SWOOP_DISABLE_EXECUTION, false),
   };
 }
 

@@ -39,6 +39,7 @@ router.get('/', async (req, res) => {
       m365TenantId: clients.m365TenantId,
       m365DefaultDomain: clients.m365DefaultDomain,
       vipEmails: clients.vipEmails,
+      authorisedContacts: clients.authorisedContacts,
       createdAt: clients.createdAt,
       actionCount: sql<number>`(select count(*) from ${actionLogs} where ${actionLogs.clientId} = ${clients.id})`,
       lastActionAt: sql<number | null>`(select max(${actionLogs.createdAt}) from ${actionLogs} where ${actionLogs.clientId} = ${clients.id})`,
@@ -51,8 +52,13 @@ router.get('/', async (req, res) => {
 });
 
 /** Lists are stored as JSON text; the API speaks arrays. */
-function toApi<T extends Pick<Client, 'emailDomains' | 'vipEmails'>>(row: T) {
-  return { ...row, emailDomains: parseDomainList(row.emailDomains), vipEmails: parseEmailList(row.vipEmails) };
+function toApi<T extends Pick<Client, 'emailDomains' | 'vipEmails' | 'authorisedContacts'>>(row: T) {
+  return {
+    ...row,
+    emailDomains: parseDomainList(row.emailDomains),
+    vipEmails: parseEmailList(row.vipEmails),
+    authorisedContacts: parseEmailList(row.authorisedContacts),
+  };
 }
 
 const domainList = z
@@ -95,6 +101,7 @@ const tenancyFields = {
     .optional(),
   m365DefaultDomain: z.string().trim().max(253).nullable().optional(),
   vipEmails: emailList.optional(),
+  authorisedContacts: emailList.optional(),
 };
 
 /**
@@ -181,6 +188,7 @@ router.post('/', async (req: AuthRequest, res) => {
     m365TenantId,
     m365DefaultDomain,
     vipEmails,
+    authorisedContacts,
   } = parsed.data;
 
   const [tenant] = await db.select({ id: tenants.id }).from(tenants).where(eq(tenants.id, tenantId)).limit(1);
@@ -223,6 +231,7 @@ router.post('/', async (req: AuthRequest, res) => {
     m365TenantId: m365TenantId?.trim() || null,
     m365DefaultDomain: m365DefaultDomain ? normaliseDomain(m365DefaultDomain) : null,
     vipEmails: vipEmails?.length ? JSON.stringify(vipEmails) : null,
+    authorisedContacts: authorisedContacts?.length ? JSON.stringify(authorisedContacts) : null,
   });
 
   await recordAudit({ user: req.user, action: 'client.create', targetType: 'client', targetId: id, tenantId, detail: { name: trimmedName }, req });
@@ -252,7 +261,7 @@ router.patch('/:id', async (req: AuthRequest, res) => {
     return;
   }
 
-  const { emailDomains, vipEmails, m365DefaultDomain, m365TenantId, ...fields } = parsed.data;
+  const { emailDomains, vipEmails, authorisedContacts, m365DefaultDomain, m365TenantId, ...fields } = parsed.data;
   const updates: Partial<Client> = { ...fields };
   if (emailDomains !== undefined) {
     const clash = existing.tenantId ? await findDomainClash(existing.tenantId, existing.id, emailDomains) : null;
@@ -263,6 +272,9 @@ router.patch('/:id', async (req: AuthRequest, res) => {
     updates.emailDomains = emailDomains.length ? JSON.stringify(emailDomains) : null;
   }
   if (vipEmails !== undefined) updates.vipEmails = vipEmails.length ? JSON.stringify(vipEmails) : null;
+  if (authorisedContacts !== undefined) {
+    updates.authorisedContacts = authorisedContacts.length ? JSON.stringify(authorisedContacts) : null;
+  }
   if (m365TenantId !== undefined) updates.m365TenantId = m365TenantId?.trim() || null;
   if (m365DefaultDomain !== undefined) {
     const domain = m365DefaultDomain?.trim() ? normaliseDomain(m365DefaultDomain) : null;

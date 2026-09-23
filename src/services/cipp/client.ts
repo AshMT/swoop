@@ -40,63 +40,71 @@ interface CachedToken {
 const tokenCache = new Map<string, CachedToken>();
 const REQUEST_TIMEOUT_MS = 15_000;
 
+/**
+ * Gets (or reuses) a CIPP-API bearer token. Shared by the read-only client
+ * here and the write client in writer.ts, which is the only other caller.
+ */
+export async function acquireCippToken(creds: CippCredentials, forceRefresh = false): Promise<string> {
+  const key = `${creds.tenantId}|${creds.clientId}|${creds.apiUrl}`;
+  const cached = tokenCache.get(key);
+  if (!forceRefresh && cached && cached.expiresAt > Date.now() + 60_000) return cached.token;
+
+  const authority = config().cippAuthorityUrl;
+  const url = `${authority}/${encodeURIComponent(creds.tenantId)}/oauth2/v2.0/token`;
+  const body = new URLSearchParams({
+    client_id: creds.clientId,
+    client_secret: creds.clientSecret,
+    scope: `api://${creds.clientId}/.default`,
+    grant_type: 'client_credentials',
+  });
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body,
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+  } catch (err) {
+    throw new CippError(`Could not reach Entra ID to get a CIPP token: ${describeError(err)}`);
+  }
+
+  const data = (await response.json().catch(() => null)) as {
+    access_token?: string;
+    expires_in?: number;
+    error?: string;
+    error_description?: string;
+  } | null;
+
+  if (!response.ok || !data?.access_token) {
+    const description = data?.error_description?.split('\n')[0] ?? `HTTP ${response.status}`;
+    if (/AADSTS7000215/.test(description)) {
+      throw new CippError('The CIPP client secret is wrong or expired. Copy the secret Value (not its ID) into Settings.', response.status);
+    }
+    throw new CippError(`Entra ID refused the CIPP token request: ${description}`, response.status);
+  }
+
+  tokenCache.set(key, {
+    token: data.access_token,
+    expiresAt: Date.now() + (data.expires_in ?? 3600) * 1000,
+  });
+  return data.access_token;
+}
+
+export function normaliseCippUrl(apiUrl: string): string {
+  return apiUrl.trim().replace(/\/+$/, '');
+}
+
 export class CippClient {
   private readonly creds: CippCredentials;
 
   constructor(creds: CippCredentials) {
-    this.creds = { ...creds, apiUrl: creds.apiUrl.trim().replace(/\/+$/, '') };
+    this.creds = { ...creds, apiUrl: normaliseCippUrl(creds.apiUrl) };
   }
 
-  private cacheKey(): string {
-    return `${this.creds.tenantId}|${this.creds.clientId}|${this.creds.apiUrl}`;
-  }
-
-  private async token(forceRefresh = false): Promise<string> {
-    const key = this.cacheKey();
-    const cached = tokenCache.get(key);
-    if (!forceRefresh && cached && cached.expiresAt > Date.now() + 60_000) return cached.token;
-
-    const authority = config().cippAuthorityUrl;
-    const url = `${authority}/${encodeURIComponent(this.creds.tenantId)}/oauth2/v2.0/token`;
-    const body = new URLSearchParams({
-      client_id: this.creds.clientId,
-      client_secret: this.creds.clientSecret,
-      scope: `api://${this.creds.clientId}/.default`,
-      grant_type: 'client_credentials',
-    });
-
-    let response: Response;
-    try {
-      response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body,
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      });
-    } catch (err) {
-      throw new CippError(`Could not reach Entra ID to get a CIPP token: ${describeError(err)}`);
-    }
-
-    const data = (await response.json().catch(() => null)) as {
-      access_token?: string;
-      expires_in?: number;
-      error?: string;
-      error_description?: string;
-    } | null;
-
-    if (!response.ok || !data?.access_token) {
-      const description = data?.error_description?.split('\n')[0] ?? `HTTP ${response.status}`;
-      if (/AADSTS7000215/.test(description)) {
-        throw new CippError('The CIPP client secret is wrong or expired. Copy the secret Value (not its ID) into Settings.', response.status);
-      }
-      throw new CippError(`Entra ID refused the CIPP token request: ${description}`, response.status);
-    }
-
-    tokenCache.set(key, {
-      token: data.access_token,
-      expiresAt: Date.now() + (data.expires_in ?? 3600) * 1000,
-    });
-    return data.access_token;
+  private token(forceRefresh = false): Promise<string> {
+    return acquireCippToken(this.creds, forceRefresh);
   }
 
   /** GET /api/<endpoint>. Retries once with a fresh token on a 401. */
@@ -148,18 +156,26 @@ export function cippConfigured(
   );
 }
 
-export function createCippClient(
+/** Decrypted credentials for a tenant, or null when CIPP is not configured. */
+export function cippCredentials(
   tenant: Pick<Tenant, 'cippEnabled' | 'cippApiUrl' | 'cippTenantId' | 'cippClientId' | 'cippClientSecret'>,
-): CippClient | null {
+): CippCredentials | null {
   if (!cippConfigured(tenant)) return null;
   const cfg = config();
   const secret = cfg.encryptionEnabled ? decrypt(tenant.cippClientSecret!, cfg.encryptionKey) : tenant.cippClientSecret!;
-  return new CippClient({
+  return {
     apiUrl: tenant.cippApiUrl!,
     tenantId: tenant.cippTenantId!,
     clientId: tenant.cippClientId!,
     clientSecret: secret,
-  });
+  };
+}
+
+export function createCippClient(
+  tenant: Pick<Tenant, 'cippEnabled' | 'cippApiUrl' | 'cippTenantId' | 'cippClientId' | 'cippClientSecret'>,
+): CippClient | null {
+  const creds = cippCredentials(tenant);
+  return creds ? new CippClient(creds) : null;
 }
 
 /** For tests: forget cached tokens. */
