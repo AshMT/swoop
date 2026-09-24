@@ -79,9 +79,8 @@ export async function acquireCippToken(creds: CippCredentials, forceRefresh = fa
 
   if (!response.ok || !data?.access_token) {
     const description = data?.error_description?.split('\n')[0] ?? `HTTP ${response.status}`;
-    if (/AADSTS7000215/.test(description)) {
-      throw new CippError('The CIPP client secret is wrong or expired. Copy the secret Value (not its ID) into Settings.', response.status);
-    }
+    const hint = entraHint(description);
+    if (hint) throw new CippError(hint, response.status);
     throw new CippError(`Entra ID refused the CIPP token request: ${description}`, response.status);
   }
 
@@ -90,6 +89,25 @@ export async function acquireCippToken(creds: CippCredentials, forceRefresh = fa
     expiresAt: Date.now() + (data.expires_in ?? 3600) * 1000,
   });
   return data.access_token;
+}
+
+/**
+ * What to do about the Entra sign-in errors people actually hit. A secret's
+ * Value is shown only once, when it is created — and adding or resetting the
+ * client in CIPP creates a new one, silently invalidating the old.
+ */
+function entraHint(description: string): string | null {
+  const newSecret =
+    'Create a new one — Entra ID → App registrations → this app → Certificates & secrets → New client secret, or CIPP → Integrations → CIPP-API → this client → Actions → Reset Application Secret — and paste its Value (shown only once, not the Secret ID) into Settings → CIPP.';
+  if (/AADSTS7000215/.test(description)) {
+    return `Entra ID rejected the CIPP client secret. It is not the current secret for this app — usually because adding or resetting the client in CIPP replaced it, or the Secret ID was pasted instead of the Value. ${newSecret}`;
+  }
+  if (/AADSTS7000222/.test(description)) return `The CIPP client secret has expired. ${newSecret}`;
+  if (/AADSTS700016/.test(description)) {
+    return 'Entra ID has no app with this Client ID in this tenant. Check the Client ID, and that the tenant ID is the MSP’s own tenant where the CIPP-API app lives.';
+  }
+  if (/AADSTS90002|AADSTS900023/.test(description)) return 'Entra ID does not recognise that tenant ID. Use the MSP’s own Entra tenant ID (a GUID).';
+  return null;
 }
 
 export function normaliseCippUrl(apiUrl: string): string {
