@@ -61,7 +61,7 @@ export interface SchemaOptions {
    * 'list' returns [TicketConversation] directly, 'wrapped' returns
    * { conversations { ... } }, 'none' omits it.
    */
-  conversations?: 'list' | 'wrapped' | 'none' | 'deep' | 'opaque' | 'textless';
+  conversations?: 'list' | 'wrapped' | 'none' | 'deep' | 'opaque' | 'textless' | 'paged';
   /** Put the body inside an object, as description { content }. */
   bodyObject?: boolean;
   /**
@@ -252,7 +252,23 @@ export function buildFakeSchema(options: SchemaOptions = {}): FakeSchema {
     };
   }
 
-  if (conversations !== 'none') {
+  if (conversations === 'paged') {
+    // What a real EU schema exposes: the ticket nested one level down, with a
+    // required paging input, and a wrapper around the entries.
+    queryFields.push({
+      name: 'getTicketConversationsList',
+      type: object('TicketConversationList'),
+      args: [{ name: 'input', type: nonNull(input('TicketConversationListInput')) }],
+    });
+    types.TicketConversationListInput = {
+      name: 'TicketConversationListInput',
+      kind: 'INPUT_OBJECT',
+      inputFields: [
+        { name: 'ticket', type: nonNull(input('TicketIdentifierInput')) },
+        { name: 'listInfo', type: nonNull(input('ListInfoInput')) },
+      ],
+    };
+  } else if (conversations !== 'none') {
     // 'deep' is the fully wrapped [TicketConversation!]! a strict schema returns;
     // 'opaque' names an entry type introspection cannot read; 'textless' has
     // entries with no text field.

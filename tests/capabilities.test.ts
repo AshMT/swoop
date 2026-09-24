@@ -117,6 +117,19 @@ describe('probeCapabilities', () => {
     expect(caps).toMatchObject({ conversationQuery: 'getTicketConversationList', conversationArgIdField: 'ticketId' });
   });
 
+  it('addresses the ticket one level down, with the paging input the query requires', async () => {
+    const caps = await probe({ bodyField: null, singleConversation: true, conversations: 'paged' });
+    expect(caps).toMatchObject({
+      conversationQuery: 'getTicketConversationsList',
+      conversationArgTicketField: 'ticket',
+      conversationArgIdField: 'ticketId',
+      conversationArgListField: 'listInfo',
+      conversationArgListFields: ['page', 'pageSize'],
+      conversationResultField: 'conversations',
+    });
+    expect(caps.warnings.join(' ')).not.toMatch(/subject line only/i);
+  });
+
   it('prefers a body on the ticket over the conversation thread', async () => {
     const caps = await probe({ conversations: 'list' });
     expect(caps.bodyField).toBe('description');
@@ -392,6 +405,19 @@ describe('reading the ticket body', () => {
     expect(enriched.body).toBe('I am locked out of Outlook');
     expect(sent[0]).toContain('getTicketConversationList(input: {ticketId: "T-1"})');
     expect(sent[0]).toContain('conversations { content time }');
+  });
+
+  it('sends the nested ticket and a page when the query needs them', async () => {
+    const { client, sent } = await clientFor({ bodyField: null, singleConversation: true, conversations: 'paged' }, () => ({
+      getTicketConversationsList: {
+        conversations: [
+          { content: 'Reply from tech', time: '2026-09-23T10:00:00Z' },
+          { content: '<p>Outlook keeps asking for my password</p>', time: '2026-09-23T09:00:00Z' },
+        ],
+      },
+    }));
+    expect((await client.enrichTicket({ ...bare })).body).toBe('Outlook keeps asking for my password');
+    expect(sent[0]).toContain('getTicketConversationsList(input: {ticket: {ticketId: "T-1"}, listInfo: {page: 1, pageSize: 100}})');
   });
 
   it('reads a body nested in an object', async () => {

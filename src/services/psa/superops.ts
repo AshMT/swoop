@@ -252,7 +252,19 @@ export class SuperOpsClient implements PSAClient {
    * ticket; later replies are left out so a long thread cannot drown it.
    */
   private async fetchFirstConversation(caps: PsaCapabilities, ticketId: string): Promise<string | null> {
-    const argValue = caps.conversationArgIdField ? { [caps.conversationArgIdField]: ticketId } : ticketId;
+    let argValue: unknown = ticketId;
+    if (caps.conversationArgIdField) {
+      const id = { [caps.conversationArgIdField]: ticketId };
+      const input: Record<string, unknown> = caps.conversationArgTicketField ? { [caps.conversationArgTicketField]: id } : id;
+      if (caps.conversationArgListField) {
+        // One generous page: the message that opened the ticket is picked by time below.
+        const paging: Record<string, number> = {};
+        if (caps.conversationArgListFields.includes('page')) paging.page = 1;
+        if (caps.conversationArgListFields.includes('pageSize')) paging.pageSize = MAX_PAGE_SIZE;
+        input[caps.conversationArgListField] = paging;
+      }
+      argValue = input;
+    }
     const entry = [caps.conversationContentField, caps.conversationTimeField].filter(Boolean).join(' ');
     const selection = caps.conversationResultField ? `${caps.conversationResultField} { ${entry} }` : entry;
     const query = `

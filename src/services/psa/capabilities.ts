@@ -13,7 +13,7 @@ import { createLogger, describeError } from '../../lib/logger';
 const log = createLogger('SuperOps:probe');
 
 /** Version stamp — bump to force a re-probe after changing the probe logic. */
-export const CAPABILITIES_VERSION = 7;
+export const CAPABILITIES_VERSION = 8;
 
 export interface ObjectFieldShape {
   /** 'leaf' needs no sub-selection; 'object' does; 'missing' means absent. */
@@ -81,6 +81,11 @@ export interface PsaCapabilities {
   conversationArgName: string | null;
   /** When the argument is an input object, the field inside it holding the ticket id. */
   conversationArgIdField: string | null;
+  /** When the ticket id sits one level down, e.g. input { ticket { ticketId } }, that field. */
+  conversationArgTicketField: string | null;
+  /** A paging input the query requires, e.g. listInfo { page pageSize }, and the fields it takes. */
+  conversationArgListField: string | null;
+  conversationArgListFields: string[];
   /** Field on the payload holding the array; null when the query returns the array itself. */
   conversationResultField: string | null;
   conversationContentField: string | null;
@@ -271,6 +276,9 @@ export async function probeCapabilities(
     conversationQuery: null,
     conversationArgName: null,
     conversationArgIdField: null,
+    conversationArgTicketField: null,
+    conversationArgListField: null,
+    conversationArgListFields: [],
     conversationResultField: null,
     conversationContentField: null,
     conversationTimeField: null,
@@ -592,6 +600,9 @@ async function tryConversationQuery(
       | 'conversationQuery'
       | 'conversationArgName'
       | 'conversationArgIdField'
+      | 'conversationArgTicketField'
+      | 'conversationArgListField'
+      | 'conversationArgListFields'
       | 'conversationResultField'
       | 'conversationContentField'
       | 'conversationTimeField'
@@ -601,17 +612,47 @@ async function tryConversationQuery(
   const arg = field.args?.[0];
   if (!arg) return { reason: 'takes no argument' };
 
-  // It must be addressed by the ticket's id, not by a message's own id.
+  // It must be addressed by the ticket's id, not by a message's own id — either
+  // directly, input { ticketId }, or one level down, input { ticket { ticketId } },
+  // optionally alongside a paging input such as listInfo { page pageSize }.
   let argIdField: string | null = null;
+  let ticketField: string | null = null;
+  let listField: string | null = null;
+  let listFields: string[] = [];
   if (namedType(arg.type).kind === 'INPUT_OBJECT') {
     const argTypeName = namedType(arg.type).name;
     const argType = argTypeName ? await describeType(argTypeName) : null;
-    const argFields = (argType?.inputFields ?? []).map((f) => f.name);
+    const inputs = argType?.inputFields ?? [];
+    const argFields = inputs.map((f) => f.name);
     argIdField =
       pickField(argFields, ['ticketId', 'ticketID', 'workId']) ??
       (argTypeName && /ticket/i.test(argTypeName) && !/conversation|thread/i.test(argTypeName) ? pickField(argFields, ['id']) : null) ??
       (documented && argFields.length === 0 ? 'ticketId' : null);
+
+    if (!argIdField) {
+      const nested = inputs.find((f) => /^ticket(identifier|input)?$/i.test(f.name) && namedType(f.type).kind === 'INPUT_OBJECT');
+      const nestedTypeName = nested ? namedType(nested.type).name : null;
+      const nestedType = nestedTypeName ? await describeType(nestedTypeName) : null;
+      const nestedId = pickField((nestedType?.inputFields ?? []).map((f) => f.name), ['ticketId', 'ticketID', 'id']);
+      if (nested && nestedId) {
+        ticketField = nested.name;
+        argIdField = nestedId;
+      }
+    }
     if (!argIdField) return { reason: `needs ${argFields.join(', ') || 'an input it could not read'}, not a ticket id` };
+
+    const paging = inputs.find((f) => /^(listinfo|pagination|paging|page(info|input)?)$/i.test(f.name) && namedType(f.type).kind === 'INPUT_OBJECT');
+    if (paging) {
+      const pagingTypeName = namedType(paging.type).name;
+      const pagingType = pagingTypeName ? await describeType(pagingTypeName) : null;
+      listField = paging.name;
+      listFields = pickFields((pagingType?.inputFields ?? []).map((f) => f.name), ['page', 'pageSize']);
+    }
+    // Anything else the input insists on is something Swoop cannot supply.
+    const unmet = inputs.filter(
+      (f) => f.type.kind === 'NON_NULL' && ![argIdField, ticketField, listField].includes(f.name),
+    );
+    if (unmet.length > 0) return { reason: `also requires ${unmet.map((f) => f.name).join(', ')}` };
   } else if (!/ticket|workid/i.test(arg.name)) {
     return { reason: `needs ${arg.name}, not a ticket id` };
   }
@@ -644,6 +685,9 @@ async function tryConversationQuery(
     conversationQuery: field.name,
     conversationArgName: arg.name,
     conversationArgIdField: argIdField,
+    conversationArgTicketField: ticketField,
+    conversationArgListField: listField,
+    conversationArgListFields: listFields,
     conversationResultField: resultField,
     conversationContentField: content,
     conversationTimeField: time,
