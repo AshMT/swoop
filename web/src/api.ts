@@ -975,3 +975,26 @@ export function bodySource(caps: Pick<PsaCapabilities, 'bodyField' | 'bodySubFie
   if (caps.conversationQuery) return `${caps.conversationQuery} (first message)`;
   return null;
 }
+
+// ─── Skipped tickets ──────────────────────────────────────────────────────────
+export interface SkippedTicket {
+  ticketId: string;
+  displayId: string | null;
+  subject: string;
+  requesterEmail: string | null;
+  superopsClientId: string | null;
+  superopsClientName: string | null;
+  reason: 'no_client' | 'client_disabled';
+  clientId: string | null;
+  clientName: string | null;
+  firstSeenAt: number;
+  lastSeenAt: number;
+  ticketUrl: string | null;
+}
+
+export const getSkippedTickets = (tenantId: string) => api.get<SkippedTicket[]>(`/tenants/${tenantId}/skipped`);
+
+export const triageSkippedTicket = (tenantId: string, ticketId: string) =>
+  api.post<{ ok: boolean; error?: string; actionLogId?: string }>(
+    `/tenants/${tenantId}/skipped/${encodeURIComponent(ticketId)}/triage`,
+  );

@@ -340,3 +340,25 @@ describe('execution, agent and knowledge settings', () => {
     expect(all.body).toHaveLength(1);
   });
 });
+
+describe('skipped tickets', () => {
+  it('lists what the poller passed over, and will not triage until the client is enabled', async () => {
+    const { recordSkipped } = await import('../src/services/skipped');
+    const { db } = await import('../src/db');
+    const { clients } = await import('../src/db/schema');
+    const { eq } = await import('drizzle-orm');
+    await db.update(clients).set({ automationEnabled: false }).where(eq(clients.id, clientId));
+    recordSkipped(tenantId, {
+      ticketId: 'T-SKIP', displayId: '4242', subject: 'Printer jammed', body: '', status: null, priority: null,
+      createdAt: null, clientId: '100', clientName: 'Acme', requesterEmail: 'amy@acme.com', requesterName: null,
+    }, { id: clientId, name: 'Acme' } as never);
+
+    const list = await as('reviewer', request(app).get(`/api/tenants/${tenantId}/skipped`)).expect(200);
+    expect(list.body[0]).toMatchObject({ ticketId: 'T-SKIP', displayId: '4242', reason: 'client_disabled', clientName: 'Acme' });
+
+    const refused = await as('reviewer', request(app).post(`/api/tenants/${tenantId}/skipped/T-SKIP/triage`)).expect(400);
+    expect(refused.body.error).toMatch(/Acme is not enabled yet/);
+    const unknown = await as('reviewer', request(app).post(`/api/tenants/${tenantId}/skipped/T-NOPE/triage`)).expect(400);
+    expect(unknown.body.error).toMatch(/no longer in the skipped list/);
+  });
+});

@@ -8,7 +8,8 @@ import { requireAuth, requireRole, type AuthRequest } from '../../middleware/aut
 import { rateLimit } from '../../middleware/security';
 import { encrypt } from '../../services/crypto';
 import { createPsaClient } from '../../services/psa/factory';
-import { runTenantCycle } from '../../services/poller';
+import { runTenantCycle, triageSkippedTicket } from '../../services/poller';
+import { listSkipped } from '../../services/skipped';
 import { describeLogStorage, pruneTenantLogs } from '../../services/retention';
 import { defaultSystemPromptTemplate } from '../../prompts/system';
 import { formatProposalNote, NOTE_FORMATS, isNoteFormat } from '../../services/note-format';
@@ -273,6 +274,58 @@ router.post(
     }
     const result = await syncSuperOpsKb(tenant);
     res.status(result.error && result.imported === 0 ? 400 : 200).json({ ok: !result.error, ...result });
+  },
+);
+
+/** Tickets the poller passed over because no enabled client matched them. */
+router.get('/:id/skipped', async (req, res) => {
+  const [tenant] = await db.select().from(tenants).where(eq(tenants.id, req.params.id)).limit(1);
+  if (!tenant) {
+    res.status(404).json({ error: 'Tenant not found' });
+    return;
+  }
+  let psa: ReturnType<typeof createPsaClient> | null = null;
+  try {
+    psa = createPsaClient(tenant);
+  } catch {
+    psa = null;
+  }
+  res.json(
+    listSkipped(tenant.id).map((s) => ({
+      ticketId: s.ticket.ticketId,
+      displayId: s.ticket.displayId,
+      subject: s.ticket.subject,
+      requesterEmail: s.ticket.requesterEmail,
+      superopsClientId: s.ticket.clientId,
+      superopsClientName: s.ticket.clientName,
+      reason: s.reason,
+      clientId: s.clientId,
+      clientName: s.clientName,
+      firstSeenAt: s.firstSeenAt,
+      lastSeenAt: s.lastSeenAt,
+      ticketUrl: psa ? psa.ticketUrl(s.ticket) : null,
+    })),
+  );
+});
+
+router.post(
+  '/:id/skipped/:ticketId/triage',
+  requireRole('reviewer'),
+  rateLimit({ windowMs: 60_000, max: 20, keyPrefix: 'skipped-triage' }),
+  async (req: AuthRequest, res) => {
+    const result = await triageSkippedTicket(req.params.id, req.params.ticketId);
+    if (result.ok) {
+      await recordAudit({
+        user: req.user,
+        action: 'ticket.triage_skipped',
+        targetType: 'action_log',
+        targetId: result.actionLogId ?? null,
+        tenantId: req.params.id,
+        detail: { ticketId: req.params.ticketId },
+        req,
+      });
+    }
+    res.status(result.ok ? 200 : 400).json(result);
   },
 );
 

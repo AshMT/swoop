@@ -23,6 +23,7 @@ import {
   useToast,
 } from '../components/ui';
 import { RefreshIcon, SearchIcon } from '../components/Icons';
+import { SkippedTickets } from '../components/SkippedTickets';
 import { formatRelative } from '../lib/format';
 import { actionLabel, categoryLabel, useCan, useVocabulary } from '../lib/session';
 
@@ -124,9 +125,16 @@ export default function Queue() {
     onSuccess: (res) => {
       void queryClient.invalidateQueries({ queryKey: ['actions'] });
       void queryClient.invalidateQueries({ queryKey: ['queue-summary'] });
+      void queryClient.invalidateQueries({ queryKey: ['skipped'] });
       const s = res.data.summary;
+      const notEnabled = s?.skipped?.['client-not-enabled'] ?? 0;
       if (!res.data.ok) toast.error(res.data.error ?? 'The poll failed');
-      else toast.success(s ? `Fetched ${s.fetched}, triaged ${s.classified}` : 'Poll complete');
+      else
+        toast.success(
+          s
+            ? `Fetched ${s.fetched}, triaged ${s.classified}${notEnabled ? `, ${notEnabled} skipped — client not enabled` : ''}`
+            : 'Poll complete',
+        );
     },
     onError: (err) => toast.error(errorMessage(err, 'Could not poll')),
   });
@@ -138,7 +146,7 @@ export default function Queue() {
     <div>
       <PageHeader
         title="Triage queue"
-        description="Each ticket's latest triage, most urgent first. Nothing here has been changed in any tenant."
+        description="Each ticket's latest triage, most urgent first."
         actions={
           canPoll && tenantId ? (
             <button className="btn-secondary" onClick={() => poll.mutate()} disabled={poll.isPending}>
@@ -147,6 +155,8 @@ export default function Queue() {
           ) : null
         }
       />
+
+      {tenantId && <SkippedTickets tenantId={tenantId} />}
 
       <PriorityStrip summary={summary} active={priority} onPick={(p) => setPriority(p === priority ? '' : p)} />
 

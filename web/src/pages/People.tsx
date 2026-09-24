@@ -256,6 +256,8 @@ function describeAudit(entry: AuditEntry): string {
       return `Changed settings: ${Array.isArray(d.fields) ? (d.fields as string[]).join(', ') : ''}`;
     case 'client.update':
       return `Changed client: ${Array.isArray(d.fields) ? (d.fields as string[]).join(', ') : ''}`;
+    case 'ticket.triage_skipped':
+      return `Triaged skipped ticket ${s('ticketId')}`;
     case 'ticket.investigate':
       return `Investigated ticket ${s('ticketId')} (${s('steps')} lookups, ${s('status')})`;
     case 'execution.dry_run':

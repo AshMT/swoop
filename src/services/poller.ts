@@ -4,6 +4,7 @@ import { db } from '../db';
 import { tenants, clients, actionLogs, processedTickets } from '../db/schema';
 import { config } from '../config';
 import { createPsaClient } from './psa/factory';
+import { forgetSkipped, getSkipped, recordSkipped } from './skipped';
 import type { SuperOpsClient } from './psa/superops';
 import { PsaError } from './psa/superops';
 import type { PsaTicket } from './psa/interface';
@@ -221,6 +222,17 @@ export async function runTenantCycle(tenant: Tenant): Promise<PollSummary> {
     if (enabledClients.length === 0) {
       summary.outcome = 'idle';
       summary.error = 'No clients have automation enabled.';
+      // Still look, so the queue can show which clients new tickets come from
+      // and offer to enable them. The window is left where it was.
+      try {
+        const seen = await createPsaClient(tenant).pollNewTickets(tenant.lastPolledAt ?? 0);
+        for (const ticket of seen) {
+          if (!ticket.ticketId) continue;
+          recordSkipped(tenant.id, ticket, resolveClient(ticket, allClients)?.client ?? null);
+        }
+      } catch (err) {
+        log.debug(`Tenant ${tenant.name}: could not list tickets while idle — ${describeError(err)}`);
+      }
       await recordPollResult(tenant.id, {
         status: 'idle',
         error: summary.error,
@@ -410,8 +422,10 @@ async function processTicket(
   const match = resolveClient(ticket, allClients);
   if (!match || !match.client.automationEnabled) {
     summary.skipped['client-not-enabled']++;
+    recordSkipped(tenant.id, ticket, match?.client ?? null);
     return;
   }
+  forgetSkipped(tenant.id, ticket.ticketId);
   const matchedClient = match.client;
 
   const attempt = (ledger?.attempts ?? 0) + 1;
@@ -652,6 +666,43 @@ export async function reclassifyTicket(
   } catch (err) {
     return { ok: false, error: describeError(err) };
   }
+}
+
+/**
+ * Triages a ticket the poller skipped, once its client has been added or
+ * enabled. The poll window only looks back a few minutes, so without this a
+ * ticket raised before its client was switched on would never be seen again.
+ */
+export async function triageSkippedTicket(
+  tenantId: string,
+  ticketId: string,
+): Promise<{ ok: boolean; error?: string; actionLogId?: string }> {
+  const entry = getSkipped(tenantId, ticketId);
+  if (!entry) return { ok: false, error: 'That ticket is no longer in the skipped list.' };
+  const [tenant] = await db.select().from(tenants).where(eq(tenants.id, tenantId)).limit(1);
+  if (!tenant) return { ok: false, error: 'Tenant not found' };
+  const allClients = await db.select().from(clients).where(eq(clients.tenantId, tenant.id));
+  const match = resolveClient(entry.ticket, allClients);
+  if (!match) {
+    return { ok: false, error: `No client in Swoop matches ${entry.ticket.clientName ?? 'this ticket'} yet. Add it on the Clients page first.` };
+  }
+  if (!match.client.automationEnabled) return { ok: false, error: `${match.client.name} is not enabled yet.` };
+
+  const summary = emptySummary();
+  await processTicket(entry.ticket, tenant, allClients, createPsaClient(tenant), summary, new Set([ticketId]));
+  const [log] = await db
+    .select({ id: actionLogs.id })
+    .from(actionLogs)
+    .where(and(eq(actionLogs.tenantId, tenantId), eq(actionLogs.ticketId, ticketId)))
+    .orderBy(desc(actionLogs.createdAt), sql`rowid DESC`)
+    .limit(1);
+  if (summary.skipped['already-processed'] > 0) {
+    forgetSkipped(tenantId, ticketId);
+    return log ? { ok: true, actionLogId: log.id } : { ok: false, error: 'That ticket was already processed.' };
+  }
+  if (summary.failed > 0 || !log) return { ok: false, error: 'Triage failed; it will be retried on the next poll.' };
+  forgetSkipped(tenantId, ticketId);
+  return { ok: true, actionLogId: log.id };
 }
 
 export { PsaError };

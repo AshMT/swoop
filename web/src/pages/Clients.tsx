@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   createClient,
@@ -38,7 +39,12 @@ export default function Clients() {
   const toast = useToast();
   const isAdmin = useCan('admin');
 
-  const [showAdd, setShowAdd] = useState(false);
+  // Arriving from a skipped ticket: open Add with its SuperOps client filled in.
+  const [params, setParams] = useSearchParams();
+  const prefill = params.get('add')
+    ? { name: params.get('name') ?? '', companyId: params.get('companyId') ?? '' }
+    : null;
+  const [showAdd, setShowAdd] = useState(Boolean(prefill));
   const [editing, setEditing] = useState<Client | null>(null);
   const [pendingDelete, setPendingDelete] = useState<Client | null>(null);
 
@@ -116,11 +122,17 @@ export default function Clients() {
         <ClientForm
           tenantId={tenantId}
           existing={clients}
-          onClose={() => setShowAdd(false)}
+          prefill={prefill}
+          onClose={() => {
+            setShowAdd(false);
+            if (prefill) setParams({}, { replace: true });
+          }}
           onSaved={() => {
             setShowAdd(false);
             invalidate();
-            toast.success('Client added');
+            void queryClient.invalidateQueries({ queryKey: ['skipped'] });
+            toast.success(prefill ? 'Client added — use Triage now on the queue for tickets it missed' : 'Client added');
+            if (prefill) setParams({}, { replace: true });
           }}
         />
       )}
@@ -272,21 +284,23 @@ function ClientForm({
   tenantId,
   client,
   existing,
+  prefill,
   onClose,
   onSaved,
 }: {
   tenantId: string;
   client?: Client;
   existing: Client[];
+  prefill?: { name: string; companyId: string } | null;
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const [name, setName] = useState(client?.name ?? '');
-  const [companyId, setCompanyId] = useState(client?.superopsCompanyId ?? '');
+  const [name, setName] = useState(client?.name ?? prefill?.name ?? '');
+  const [companyId, setCompanyId] = useState(client?.superopsCompanyId ?? prefill?.companyId ?? '');
   const [contextNotes, setContextNotes] = useState(client?.contextNotes ?? '');
   const [promptOverride, setPromptOverride] = useState(client?.systemPromptOverride ?? '');
   const [showPrompt, setShowPrompt] = useState(Boolean(client?.systemPromptOverride));
-  const [enabled, setEnabled] = useState(client?.automationEnabled ?? false);
+  const [enabled, setEnabled] = useState(client?.automationEnabled ?? Boolean(prefill));
   const [domains, setDomains] = useState((client?.emailDomains ?? []).join(', '));
   const [m365Domain, setM365Domain] = useState(client?.m365DefaultDomain ?? '');
   const [m365TenantId, setM365TenantId] = useState(client?.m365TenantId ?? '');
